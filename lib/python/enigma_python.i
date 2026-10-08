@@ -214,6 +214,17 @@ typedef long time_t;
 %include <lib/gdi/gpixmap.h>
 %include <lib/gdi/gmaindc.h>
 %include <lib/gdi/epoint.h>
+
+/* ------------------------------------------------------------------ */
+/* FIX: accept float in ePoint constructor for Python 3 compatibility */
+/* ------------------------------------------------------------------ */
+%extend ePoint {
+	ePoint(float x, float y) {
+		return new ePoint((int)x, (int)y);
+	}
+};
+/* ------------------------------------------------------------------ */
+
 %include <lib/gdi/erect.h>
 %include <lib/gdi/esize.h>
 %include <lib/gui/ewidget.h>
