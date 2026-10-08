@@ -151,39 +151,62 @@ int ePython::execute(const std::string &pythonfile, const std::string &funcname)
 {
 	ePyObject pName, pModule, pDict, pFunc, pArgs, pValue;
 	pName = PyUnicode_FromString(pythonfile.c_str());
+	if (!pName)
+	{
+		PyErr_Print();
+		return 1;
+	}
 
 	pModule = PyImport_Import(pName);
 	Py_DECREF(pName);
 
-	if (pModule)
-	{
-		pDict = PyModule_GetDict(pModule);
-
-		pFunc = PyDict_GetItemString(pDict, funcname.c_str());
-
-		if (pFunc && PyCallable_Check(pFunc))
-		{
-			pArgs = PyTuple_New(0);
-				// implement arguments..
-			pValue = PyObject_CallObject(pFunc, pArgs);
-			Py_DECREF(pArgs);
-			if (pValue)
-			{
-				printf("Result of call: %ld\n", PyLong_AsLong(pValue));
-				Py_DECREF(pValue);
-			} else
-			{
-				Py_DECREF(pModule);
-				PyErr_Print();
-				return 1;
-			}
-		}
-	} else
+	if (!pModule)
 	{
 		if (PyErr_Occurred())
 			PyErr_Print();
 		return 1;
 	}
+
+	pDict = PyModule_GetDict(pModule);
+	if (!pDict)
+	{
+		Py_DECREF(pModule);
+		if (PyErr_Occurred())
+			PyErr_Print();
+		return 1;
+	}
+
+	pFunc = PyDict_GetItemString(pDict, funcname.c_str());
+	if (!pFunc || !PyCallable_Check(pFunc))
+	{
+		/* pFunc may be NULL if the key does not exist; PyDict_GetItemString
+		   does not set an exception in that case.  Either way, nothing to
+		   call, so report and exit. */
+		Py_DECREF(pModule);
+		return 1;
+	}
+
+	pArgs = PyTuple_New(0);
+	if (!pArgs)
+	{
+		Py_DECREF(pModule);
+		PyErr_Print();
+		return 1;
+	}
+
+	pValue = PyObject_CallObject(pFunc, pArgs);
+	Py_DECREF(pArgs);
+
+	if (!pValue)
+	{
+		Py_DECREF(pModule);
+		PyErr_Print();
+		return 1;
+	}
+
+	printf("Result of call: %ld\n", PyLong_AsLong(pValue));
+	Py_DECREF(pValue);
+	Py_DECREF(pModule);
 	return 0;
 }
 
@@ -194,7 +217,7 @@ int ePython::call(ePyObject pFunc, ePyObject pArgs)
 	if (pFunc && PyCallable_Check(pFunc))
 	{
 		pValue = PyObject_CallObject(pFunc, pArgs);
- 		if (pValue)
+		if (pValue)
 		{
 			if (PyLong_Check(pValue))
 				res = PyLong_AsLong(pValue);
@@ -203,14 +226,16 @@ int ePython::call(ePyObject pFunc, ePyObject pArgs)
 			Py_DECREF(pValue);
 		} else
 		{
-		 	PyErr_Print();
+			PyErr_Print();
 			ePyObject FuncStr = PyObject_Str(pFunc);
-			ePyObject ArgStr = PyObject_Str(pArgs);
-			eLog(lvlFatal, "[ePyObject] (CallObject(%s,%s) failed)", PyUnicode_AsUTF8(FuncStr), PyUnicode_AsUTF8(ArgStr));
-			Py_DECREF(FuncStr);
-			Py_DECREF(ArgStr);
+			ePyObject ArgStr = pArgs ? ePyObject(PyObject_Str(pArgs)) : ePyObject();
+			const char *funcStr = FuncStr ? PyUnicode_AsUTF8(FuncStr) : "<unprintable>";
+			const char *argStr = ArgStr ? PyUnicode_AsUTF8(ArgStr) : "<unprintable>";
+			eLog(lvlFatal, "[ePyObject] (CallObject(%s,%s) failed)",
+				funcStr ? funcStr : "<null>",
+				argStr ? argStr : "<null>");
 			/* immediately show BSOD, so we have the actual error at the bottom */
-		 	bsodFatal(0);
+			bsodFatal(0);
 			/* and make sure we quit (which would also eventually cause a bsod, but with useless termination messages) */
 			quitMainloop(5);
 		}
@@ -223,6 +248,11 @@ ePyObject ePython::resolve(const std::string &pythonfile, const std::string &fun
 	ePyObject pName, pModule, pDict, pFunc;
 
 	pName = PyUnicode_FromString(pythonfile.c_str());
+	if (!pName)
+	{
+		PyErr_Print();
+		return pFunc;
+	}
 
 	pModule = PyImport_Import(pName);
 	Py_DECREF(pName);
@@ -230,7 +260,7 @@ ePyObject ePython::resolve(const std::string &pythonfile, const std::string &fun
 	if (pModule)
 	{
 		pDict = PyModule_GetDict(pModule);
-		pFunc = PyDict_GetItemString(pDict, funcname.c_str());
+		pFunc = pDict ? ePyObject(PyDict_GetItemString(pDict, funcname.c_str())) : ePyObject();
 		Py_XINCREF(pFunc);
 		Py_DECREF(pModule);
 	} else if (PyErr_Occurred())

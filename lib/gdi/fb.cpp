@@ -9,20 +9,39 @@
 
 #include <lib/gdi/fb.h>
 
-#ifdef HAVE_HIFBLAYER
-#include "hifb.h"
-#endif
-
 #ifndef FBIO_WAITFORVSYNC
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, uint32_t)
 #endif
 
-#ifndef FBIO_BLIT
+#ifdef CONFIG_ION
+
+#include <lib/gdi/accel.h>
+#include <interfaces/ion.h>
+#define ION_HEAP_TYPE_BMEM      (ION_HEAP_TYPE_CUSTOM + 1)
+#define ION_HEAP_ID_MASK        (1 << ION_HEAP_TYPE_BMEM)
+// This pool is one upfront ION_IOC_ALLOC() call at boot that PERMANENTLY
+// reserves this much from the system-wide ION heap, regardless of how much
+// of it gAccel's own sub-allocator is actually using at any given moment
+// (accel.cpp's accelAlloc()/accelFree() only manage USERSPACE bookkeeping
+// within this already-reserved block - they never give any of it back to
+// the system). Previously shrunk to 8MB on GLES specifically to leave the
+// vendor GPU driver's own internal ION/texture allocations more headroom -
+// that was working around symptoms of a real bug (gEGLDC::executeBlit() and
+// friends leaking a gPixmap AddRef() and its opcode struct on every draw,
+// see gegldc.cpp - fixed now), not an actual capacity shortfall, so back to
+// the same 32MB both renderers have always safely used as sole/primary
+// consumer.
+#define ACCEL_MEM_SIZE          (32*1024*1024)
+
+#elif !defined(FBIO_BLIT)
+
 #define FBIO_SET_MANUAL_BLIT _IOW('F', 0x21, __u8)
 #define FBIO_BLIT 0x22
+
 #endif
 
 fbClass *fbClass::instance;
+void (*fbClass::lockChanged)(bool) = NULL;
 
 fbClass *fbClass::getInstance()
 {
@@ -34,21 +53,18 @@ fbClass::fbClass(const char *fb)
 	m_manual_blit=-1;
 	instance=this;
 	locked=0;
-	lfb=0;
-	m_lfb_base=0;
-
+	lfb = 0;
 	available=0;
-	m_available_total=0;
-
-	m_phys_mem=0;
-	m_phys_mem_base=0;
-
 	cmap.start=0;
 	cmap.len=256;
 	cmap.red=red;
 	cmap.green=green;
 	cmap.blue=blue;
 	cmap.transp=trans;
+
+#ifdef CONFIG_ION
+	int ion;
+#endif
 
 	fbFd=open(fb, O_RDWR);
 	if (fbFd<0)
@@ -71,18 +87,97 @@ fbClass::fbClass(const char *fb)
 		goto nolfb;
 	}
 
-	m_available_total = fix.smem_len;
-	m_phys_mem_base = fix.smem_start;
-	available = m_available_total;
-	m_phys_mem = m_phys_mem_base;
-	eDebug("[fb] %s: %dk video mem", fb, m_available_total/1024);
-	m_lfb_base=(unsigned char*)mmap(0, m_available_total, PROT_WRITE|PROT_READ, MAP_SHARED, fbFd, 0);
-	lfb = m_lfb_base;
-	if (!m_lfb_base)
+	available = fix.smem_len;
+	m_phys_mem = fix.smem_start;
+	eDebug("[fb] %s: %dk video mem", fb, available/1024);
+#if defined(CONFIG_ION)
+	/* allocate accel memory here... its independent from the framebuffer */
+	ion = open("/dev/ion", O_RDWR | O_CLOEXEC);
+	if (ion >= 0)
 	{
-		eDebug("[fb] mmap: %m");
+		struct ion_allocation_data alloc_data;
+		struct ion_fd_data share_data;
+		struct ion_handle_data free_data;
+		struct ion_phys_data phys_data;
+		int ret;
+		unsigned char *lion;
+
+		eDebug("[fb] Using ION allocator");
+
+		memset(&alloc_data, 0, sizeof(alloc_data));
+		alloc_data.len = ACCEL_MEM_SIZE;
+		alloc_data.align = 4096; // 4k aligned
+		alloc_data.heap_id_mask = ION_HEAP_ID_MASK;
+		ret = ioctl(ion, ION_IOC_ALLOC, &alloc_data);
+		if (ret < 0)
+		{
+			eDebug("[fb] ION_IOC_ALLOC failed");
+			eFatal("[fb] failed to allocate accel memory!!!");
+			return;
+		}
+
+		memset(&phys_data, 0, sizeof(phys_data));
+		phys_data.handle = alloc_data.handle;
+		ret = ioctl(ion, ION_IOC_PHYS, &phys_data);
+		if (ret < 0)
+		{
+			eDebug("[fb] ION_IOC_PHYS failed");
+			goto err_ioc_free;
+		}
+
+		memset(&share_data, 0, sizeof(share_data));
+		share_data.handle = alloc_data.handle;
+		ret = ioctl(ion, ION_IOC_SHARE, &share_data);
+		if (ret < 0)
+		{
+			eDebug("[fb] ION_IOC_SHARE failed");
+			goto err_ioc_free;
+		}
+
+		memset(&free_data, 0, sizeof(free_data));
+		free_data.handle = alloc_data.handle;
+		if (ioctl(ion, ION_IOC_FREE, &free_data) < 0)
+			eDebug("[fb] ION_IOC_FREE failed");
+
+		m_accel_fd = share_data.fd;
+		lion=(unsigned char*)mmap(0, ACCEL_MEM_SIZE, PROT_WRITE|PROT_READ, MAP_SHARED, share_data.fd, 0);
+
+		if (lion)
+		{
+			eDebug("[fb] %dkB available for acceleration surfaces (via ION).", ACCEL_MEM_SIZE / 1024);
+			m_accel_phys_addr = phys_data.addr;
+			gAccel::getInstance()->setAccelMemorySpace(lion, phys_data.addr, ACCEL_MEM_SIZE);
+		}
+		else
+		{
+			close(m_accel_fd);
+			eDebug("[fb] mmap lion failed");
+err_ioc_free:
+			eFatal("[fb] failed to allocate accel memory via ION!!!");
+			m_accel_fd = -1;
+			memset(&free_data, 0, sizeof(free_data));
+			free_data.handle = alloc_data.handle;
+			if (ioctl(ion, ION_IOC_FREE, &free_data) < 0)
+				eDebug("[fb] ION_IOC_FREE %m");
+		}
+		close(ion);
+	}
+	else
+	{
+		eFatal("[fb] failed to open ION device node! no allocate accel memory available !!");
+		m_accel_fd = -1;
+	}
+#else
+	eDebug("[fb] %dk video mem", available/1024);
+	lfb=(unsigned char*)mmap(0, available, PROT_WRITE|PROT_READ, MAP_SHARED, fbFd, 0);
+#endif
+#ifndef CONFIG_ION
+	if (!lfb)
+	{
+		eDebug("[fb] mmap %m");
 		goto nolfb;
 	}
+#endif
 
 	showConsole(0);
 
@@ -94,7 +189,7 @@ nolfb:
 		::close(fbFd);
 		fbFd = -1;
 	}
-	eDebug("[fb] framebuffer %s not available", fb);
+	eDebug("[fb] framebuffer not available");
 	return;
 }
 
@@ -115,8 +210,20 @@ int fbClass::showConsole(int state)
 int fbClass::SetMode(int nxRes, int nyRes, int nbpp)
 {
 	if (fbFd < 0) return -1;
+#ifdef CONFIG_ION
+	/* unmap old framebuffer with old size */
+	if (lfb)
+		munmap(lfb, stride * screeninfo.yres_virtual);
+#endif
+
 	screeninfo.xres_virtual=screeninfo.xres=nxRes;
+#if defined(CONFIG_ION)
+	screeninfo.yres = nyRes;
+	screeninfo.yres_virtual = nyRes * 3;
+#else
 	screeninfo.yres_virtual=(screeninfo.yres=nyRes)*2;
+#endif
+	screeninfo.activate = FB_ACTIVATE_ALL;
 	screeninfo.height=0;
 	screeninfo.width=0;
 	screeninfo.xoffset=screeninfo.yoffset=0;
@@ -147,6 +254,34 @@ int fbClass::SetMode(int nxRes, int nyRes, int nbpp)
 		break;
 	}
 
+#if defined(CONFIG_ION)
+	if (ioctl(fbFd, FBIOPUT_VSCREENINFO, &screeninfo)<0)
+	{
+		screeninfo.yres_virtual = nyRes * 2;
+
+		if (ioctl(fbFd, FBIOPUT_VSCREENINFO, &screeninfo)<0)
+		{
+			// try single buffering
+			screeninfo.yres_virtual = nyRes;
+
+			if (ioctl(fbFd, FBIOPUT_VSCREENINFO, &screeninfo)<0)
+			{
+				eDebug("[fb] FBIOPUT_VSCREENINFO %m");
+				return -1;
+			}
+			eDebug("[fb] double buffering not available.");
+		}
+	}
+
+	m_number_of_pages = screeninfo.yres_virtual / nyRes;
+	if (m_number_of_pages >= 3)
+		eDebug("[fb] triple buffering available!");
+	else if (m_number_of_pages == 2)
+		eDebug("[fb] double buffering available!");
+	else
+		eDebug("[fb] using single buffer");
+	eDebug("[fb] %d page(s) available!", m_number_of_pages);
+#else
 	if (ioctl(fbFd, FBIOPUT_VSCREENINFO, &screeninfo)<0)
 	{
 		// try single buffering
@@ -154,14 +289,16 @@ int fbClass::SetMode(int nxRes, int nyRes, int nbpp)
 
 		if (ioctl(fbFd, FBIOPUT_VSCREENINFO, &screeninfo)<0)
 		{
-			eDebug("[fb] FBIOPUT_VSCREENINFO: %m");
+			eDebug("[fb] FBIOPUT_VSCREENINFO %m");
 			return -1;
 		}
 		eDebug("[fb] double buffering not available.");
-	} else
+	} 
+	else
 		eDebug("[fb] double buffering available!");
 
 	m_number_of_pages = screeninfo.yres_virtual / nyRes;
+#endif
 
 	ioctl(fbFd, FBIOGET_VSCREENINFO, &screeninfo);
 
@@ -178,60 +315,18 @@ int fbClass::SetMode(int nxRes, int nyRes, int nbpp)
 	fb_fix_screeninfo fix;
 	if (ioctl(fbFd, FBIOGET_FSCREENINFO, &fix)<0)
 	{
-		eDebug("[fb] FBIOGET_FSCREENINFO: %m");
+		eDebug("[fb] FBIOGET_FSCREENINFO %m");
 	}
-
 	stride=fix.line_length;
+
+#ifdef CONFIG_ION
+	m_phys_mem = fix.smem_start;
+	available = fix.smem_len;
+	/* map new framebuffer */
+	lfb=(unsigned char*)mmap(0, stride * screeninfo.yres_virtual, PROT_WRITE|PROT_READ, MAP_SHARED, fbFd, 0);
+#endif
+
 	memset(lfb, 0, stride*yRes);
-
-#ifdef HAVE_HIFBLAYER
-	if (access("/etc/hifblayer", F_OK) == 0 && m_available_total > (stride * yRes * 3))
-	{
-		HIFB_LAYER_INFO_S layerinfo;
-		if (ioctl(fbFd, FBIOGET_LAYER_INFO, &layerinfo) < 0)
-		{
-			eDebug("[fb] FBIOGET_LAYER_INFO: %m");
-		}
-		else
-		{
-			memset(&layerinfo, 0x00, sizeof(layerinfo));
-
-			layerinfo.eAntiflickerLevel = HIFB_LAYER_ANTIFLICKER_NONE;
-			layerinfo.BufMode = HIFB_LAYER_BUF_DOUBLE_IMMEDIATE;
-			layerinfo.u32CanvasWidth = xRes;
-			layerinfo.u32CanvasHeight = yRes;
-			layerinfo.u32Mask |= HIFB_LAYERMASK_BUFMODE;
-			layerinfo.u32Mask |= HIFB_LAYERMASK_ANTIFLICKER_MODE;
-			layerinfo.u32Mask |= HIFB_LAYERMASK_CANVASSIZE;
-			if (ioctl(fbFd, FBIOPUT_LAYER_INFO, &layerinfo) < 0)
-			{
-				eDebug("[fb] FBIOPUT_LAYER_INFO: %m");
-				return (-1);
-			}
-			else
-			{
-				// We must use framebuffer-mapped memory for the canvas because
-				// FBIOGET_CANVAS_BUFFER is not supported on the SF8008 platform.
-				//
-				// The first two framebuffer pages cannot be used, as they are reserved
-				// by the driver for hardware double buffering.
-				int frame_size = stride * yRes;
-				m_phys_mem = m_phys_mem_base  + frame_size * 2;
-				lfb        = m_lfb_base       + frame_size * 2;
-				available  = m_available_total - frame_size * 2;
-
-				// Double buffering is handled internally by the driver.
-				// We account for this by skipping the first two framebuffer pages above.
-				// See gdi/gfbdc.cpp for fb->getNumPages() usage.
-				m_number_of_pages = 1;
-
-				memset(lfb, 0, stride*yRes);
-				eDebug("[fb] Use HIFB_LAYER");
-			}
-		}
-	}
-#endif // HAVE_HIFBLAYER
-
 	blit();
 	return 0;
 }
@@ -246,6 +341,13 @@ void fbClass::getMode(int &xres, int &yres, int &bpp)
 int fbClass::setOffset(int off)
 {
 	if (fbFd < 0) return -1;
+#ifdef CONFIG_ION
+    // When locked (e.g. Kodi running), do not pan the framebuffer.
+    // With double/triple buffering, FBIOPAN_DISPLAY would otherwise make
+    // Enigma2's OSD page visible again sporadically.
+    if (locked)
+        return 0;
+#endif
 	screeninfo.xoffset = 0;
 	screeninfo.yoffset = off;
 	return ioctl(fbFd, FBIOPAN_DISPLAY, &screeninfo);
@@ -255,78 +357,30 @@ int fbClass::waitVSync()
 {
 	int c = 0;
 	if (fbFd < 0) return -1;
-	int ret = ioctl(fbFd, FBIO_WAITFORVSYNC, &c);
-	return ret;
+	return ioctl(fbFd, FBIO_WAITFORVSYNC, &c);
 }
 
 void fbClass::blit()
 {
-
 	if (fbFd < 0) return;
-	if (m_manual_blit == 0) {
-		return;
-	}
-
-	if (m_phys_mem == m_phys_mem_base)
-	{
+#if !defined(CONFIG_ION)
+	if (m_manual_blit == 1) {
 		if (ioctl(fbFd, FBIO_BLIT) < 0)
-			eDebug("[fb] FBIO_BLIT: %m");
+			eDebug("[fb] FBIO_BLIT %m");
 	}
-#ifdef HAVE_HIFBLAYER
-	else
-	{
-		// HI Buffer layer mode
-		HIFB_BUFFER_S CanvasBuf;
-		CanvasBuf.stCanvas.u32PhyAddr = m_phys_mem;
-		CanvasBuf.stCanvas.u32Height  = yRes;
-		CanvasBuf.stCanvas.u32Width   = xRes;
-
-		switch (bpp) {
-		case 16:
-			CanvasBuf.stCanvas.enFmt  = HIFB_FMT_ARGB1555;
-			break;
-		case 32:
-			CanvasBuf.stCanvas.enFmt  = HIFB_FMT_ARGB8888;
-			break;
-		default:
-			eDebug("[fb] WRONG BPP: %d", bpp);
-		}
-
-		CanvasBuf.stCanvas.u32Pitch   = xRes * (bpp/8);
-
-		// Ideally, only the dirty region modified by Enigma2 since the previous refresh
-		// should be updated instead of refreshing the full screen.
-		// However, the refresh is performed via DMA transfer, which is fast enough
-		// to sustain full FPS (60 Hz and 50 Hz), so a full-screen update is acceptable.
-		CanvasBuf.UpdateRect.x = 0;
-		CanvasBuf.UpdateRect.y = 0;
-		CanvasBuf.UpdateRect.w = CanvasBuf.stCanvas.u32Width;
-		CanvasBuf.UpdateRect.h = CanvasBuf.stCanvas.u32Height;
-
-		if (ioctl(fbFd, FBIO_REFRESH, &CanvasBuf) < 0)
-		{
-			eDebug("[fb] FBIO_REFRESH: %m");
-		}
-
-#if 0
-		// Not required when using HIFB_LAYER_BUF_DOUBLE_IMMEDIATE,
-		// as the refresh is applied immediately and does not need
-		// an explicit wait for completion.
-		if (ioctl(fbFd, FBIO_WAITFOR_FREFRESH_DONE, NULL) < 0)
-		{
-			eDebug("[fb] FBIO_WAITFOR_FREFRESH_DONE: %m");
-		}
 #endif
-	}
-#endif // HAVE_HIFBLAYER
 }
 
 fbClass::~fbClass()
 {
-	if (m_lfb_base)
+#ifdef CONFIG_ION
+	if (m_accel_fd > -1)
+		close(m_accel_fd);
+#endif
+	if (lfb)
 	{
-		msync(m_lfb_base, m_available_total, MS_SYNC);
-		munmap(m_lfb_base, m_available_total);
+		msync(lfb, available, MS_SYNC);
+		munmap(lfb, available);
 	}
 	showConsole(1);
 	disableManualBlit();
@@ -354,6 +408,8 @@ int fbClass::lock()
 	}
 	else
 		locked = 1;
+	if (lockChanged)
+		lockChanged(true);
 	return fbFd;
 }
 
@@ -364,27 +420,32 @@ void fbClass::unlock()
 	if (locked == 2)  // re-enable manualBlit
 		enableManualBlit();
 	locked=0;
+	if (lockChanged)
+		lockChanged(false);
 	SetMode(xRes, yRes, bpp);
 	PutCMAP();
 }
 
 void fbClass::enableManualBlit()
 {
-	unsigned char tmp = 1;
 	if (fbFd < 0) return;
+#ifndef CONFIG_ION
+	unsigned char tmp = 1;
 	if (ioctl(fbFd,FBIO_SET_MANUAL_BLIT, &tmp)<0)
-		eDebug("[fb] enable FBIO_SET_MANUAL_BLIT: %m");
+		eDebug("[fb] FBIO_SET_MANUAL_BLIT %m");
 	else
 		m_manual_blit = 1;
+#endif
 }
 
 void fbClass::disableManualBlit()
 {
+#ifndef CONFIG_ION
 	unsigned char tmp = 0;
 	if (fbFd < 0) return;
 	if (ioctl(fbFd,FBIO_SET_MANUAL_BLIT, &tmp)<0)
-		eDebug("[fb] disable FBIO_SET_MANUAL_BLIT: %m");
+		eDebug("[fb] FBIO_SET_MANUAL_BLIT %m");
 	else
 		m_manual_blit = 0;
+#endif
 }
-

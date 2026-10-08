@@ -6,6 +6,8 @@
 #include <lib/service/iservice.h>
 
 void PutToDict(ePyObject &dict, const char *key, long value);
+/* NOTE: this overload steals the reference to 'item' (i.e. it decrefs it).
+   Callers must pass an owned reference, not a borrowed one. */
 void PutToDict(ePyObject &dict, const char *key, ePyObject item);
 void PutToDict(ePyObject &dict, const char *key, const char *value);
 

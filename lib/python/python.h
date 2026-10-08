@@ -254,11 +254,6 @@ inline ePyObject Impl_PyLong_FromLong(const char* file, int line, long val)
 	return ePyObject(PyLong_FromLong(val), file, line);
 }
 
-inline ePyObject Impl_PyLong_FromLong(const char* file, int line, long val)
-{
-	return ePyObject(PyLong_FromLong(val), file, line);
-}
-
 inline ePyObject Impl_PyLong_FromUnsignedLong(const char* file, int line, unsigned long val)
 {
 	return ePyObject(PyLong_FromUnsignedLong(val), file, line);
@@ -268,6 +263,7 @@ inline ePyObject Impl_PyLong_FromLongLong(const char* file, int line, long long 
 {
 	return ePyObject(PyLong_FromLongLong(val), file, line);
 }
+
 inline ePyObject Impl_PyLong_FromUnsignedLongLong(const char* file, int line, unsigned long long val)
 {
 	return ePyObject(PyLong_FromUnsignedLongLong(val), file, line);
@@ -388,7 +384,7 @@ inline void Impl_DECREF(PyObject *ob)
 #define PyLong_FromLong(val) Impl_PyLong_FromLong(__FILE__, __LINE__, val)
 #define PyLong_FromUnsignedLong(val) Impl_PyLong_FromUnsignedLong(__FILE__, __LINE__, val)
 #define PyLong_FromLongLong(val) Impl_PyLong_FromLongLong(__FILE__, __LINE__, val)
-#define PyLong_FromUnsignedLongLong(val) Impl_PyLongFromUnsignedLongLong(__FILE__, __LINE__, val)
+#define PyLong_FromUnsignedLongLong(val) Impl_PyLong_FromUnsignedLongLong(__FILE__, __LINE__, val)
 #define PyList_GET_ITEM(list, pos) Impl_PyList_GET_ITEM(__FILE__, __LINE__, list, pos)
 #define PyTuple_GET_ITEM(list, pos) Impl_PyTuple_GET_ITEM(__FILE__, __LINE__, list, pos)
 #else

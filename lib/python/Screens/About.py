@@ -15,6 +15,11 @@ from Components.ProgressBar import ProgressBar
 
 from Tools.StbHardware import getFPVersion
 from enigma import eTimer, eLabel, eConsoleAppContainer, getDesktop, eGetEnigmaDebugLvl, eDVBCSAEngine
+try:
+	from enigma import getEGLVersionString, getGLESVersionString
+except ImportError:
+	getEGLVersionString = lambda: ""
+	getGLESVersionString = lambda: ""
 
 from Components.GUIComponent import GUIComponent
 from skin import applySkinFactor, parameters, parseScale
@@ -24,6 +29,34 @@ import glob
 
 API_GITHUB = 0
 API_GITLAB = 1
+
+
+# Helper functions to read version info from enigma.info
+def getGlibcVersionFromEnigmaInfo():
+	try:
+		if os.path.exists('/usr/lib/enigma.info'):
+			with open('/usr/lib/enigma.info', 'r') as f:
+				for line in f:
+					if line.startswith('glibc='):
+						return line.strip().split('=', 1)[1]
+					if line.startswith('glibcversion='):
+						return line.strip().split('=', 1)[1]
+	except:
+		pass
+	return _("Unknown")
+
+def getGccVersionFromEnigmaInfo():
+	try:
+		if os.path.exists('/usr/lib/enigma.info'):
+			with open('/usr/lib/enigma.info', 'r') as f:
+				for line in f:
+					if line.startswith('gcc='):
+						return line.strip().split('=', 1)[1]
+					if line.startswith('gccversion='):
+						return line.strip().split('=', 1)[1]
+	except:
+		pass
+	return _("Unknown")
 
 
 class About(Screen):
@@ -38,7 +71,9 @@ class About(Screen):
 		AboutText += _("Image: ") + about.getImageTypeString() + "\n"
 		AboutText += _("OE Version: ") + about.getOEVersionString() + "\n"
 		AboutText += _("Build date: ") + about.getBuildDateString() + "\n"
-		AboutText += _("Last update: ") + about.getUpdateDateString() + "\n"
+		ImageVersion = _("Last update: ") + about.getImageVersionString()
+		self["ImageVersion"] = StaticText(ImageVersion)
+		AboutText += ImageVersion + "\n"
 
 		# [WanWizard] Removed until we find a reliable way to determine the installation date
 		# AboutText += _("Installed: ") + about.getFlashDateString() + "\n"
@@ -56,7 +91,7 @@ class About(Screen):
 			libName = eDVBCSAEngine.getLibraryName()
 			libVersion = eDVBCSAEngine.getLibraryVersion()
 			if libName and libVersion:
-				AboutText += _("iCAM descrambling: ") + libName + " " + libVersion + "\n"
+				AboutText += _("Software descrambling: ") + libName + " " + libVersion + "\n"
 
 		GStreamerVersion = about.getGStreamerVersionString().replace("GStreamer", "")
 		self["GStreamerVersion"] = StaticText(GStreamerVersion)
@@ -65,23 +100,32 @@ class About(Screen):
 		self["ffmpegVersion"] = StaticText(ffmpegVersion)
 
 		player = None
-
-		if os.path.isfile('/var/lib/opkg/info/enigma2-plugin-systemplugins-servicemp3.list'):
-			if GStreamerVersion:
-				player = _("Media player") + ": Gstreamer, " + _("version") + " " + GStreamerVersion
-		if os.path.isfile('/var/lib/opkg/info/enigma2-plugin-systemplugins-servicehisilicon.list'):
-			if os.path.isdir("/usr/lib/hisilicon") and glob.glob("/usr/lib/hisilicon/libavcodec.so.*"):
-				player = _("Media player") + ": ffmpeg, " + _("Hardware Accelerated")
-			elif ffmpegVersion and ffmpegVersion[0].isdigit():
-				player = _("Media player") + ": ffmpeg, " + _("version") + " " + ffmpegVersion
-
 		if player is None:
-				player = _("Media player") + ": " + _("Not Installed")
+			if GStreamerVersion:
+				player = _("GStreamer multimedia") + ": GStreamer, " + _("version") + " " + GStreamerVersion
+			else:
+				player = _("GStreamer multimedia") + ": " + _("Not Installed")
+
+		player2 = None
+		if player2 is None:
+			if ffmpegVersion:
+				player2 = _("FFmpeg multimedia") + ": FFmpeg, " + _("version") + " " + ffmpegVersion
+			else:
+				player2 = _("FFmpeg multimedia") + ": " + _("Not Installed")
 
 		AboutText += player + "\n"
 
+		AboutText += player2 + "\n"
+
+		AboutText += _("OpenSSL: ") + about.getOpenSSLVersion() + "\n"
+
+		AboutText += _("GCC: ") + getGccVersionFromEnigmaInfo() + "\n"
+
+		AboutText += _("Glibc: ") + getGlibcVersionFromEnigmaInfo() + "\n"
+
 		AboutText += _("Python version: ") + about.getPythonVersionString() + "\n"
 
+		AboutText += "\n"
 		AboutText += _("Enigma (re)starts: %d\n") % config.misc.startCounter.value
 		AboutText += _("Uptime: %s\n") % about.getBoxUptime()
 		AboutText += _("Enigma debug level: %d\n") % eGetEnigmaDebugLvl()
@@ -92,6 +136,10 @@ class About(Screen):
 			AboutText += fp_version + "\n"
 
 		self["FPVersion"] = StaticText(fp_version)
+
+		egl = " / ".join([x for x in (eglStr(), glesStr()) if x])
+		if egl:
+			AboutText += _("EGL/GLES: %s\n") % egl
 
 		AboutText += _('Skin & Resolution: %s (%sx%s)\n') % (config.skin.primary_skin.value.split('/')[0], getDesktop(0).size().width(), getDesktop(0).size().height())
 
@@ -162,6 +210,20 @@ class About(Screen):
 
 	def showTroubleshoot(self):
 		self.session.open(Troubleshoot)
+
+
+def eglStr():
+	egl = getEGLVersionString().strip()
+	if not egl:
+		egl = "1.5"
+	return f"EGL {egl}"
+
+
+def glesStr():
+	gles = getGLESVersionString().strip()
+	if not gles:
+		gles = "OpenGL ES 3.1"
+	return gles
 
 
 class TranslationInfo(Screen):
@@ -493,8 +555,8 @@ class Troubleshoot(Screen):
 		self.commands = ["dmesg", "ifconfig", "df -h", "top -n 1", "ps -l", "cat /var/volatile/log/messages", "cat /usr/lib/enigma.info", "boxinfo"]
 		install_log = "/home/root/autoinstall.log"
 		if os.path.isfile(install_log):
-				self.titles.append("%s" % install_log)
-				self.commands.append("cat %s" % install_log)
+			self.titles.append("%s" % install_log)
+			self.commands.append("cat %s" % install_log)
 		self.numberOfCommands = len(self.commands)
 		fileNames = self.getLogFilesList()
 		if fileNames:

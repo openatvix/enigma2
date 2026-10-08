@@ -177,6 +177,12 @@ public:
 
 	void blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, const gRGB &foreground, bool border = false);
 
+	// Needed by gEGLDC::exec()'s gOpcode::renderPara handling (gegldc.cpp) to
+	// know which screen region to composite after blit() has run - area is
+	// otherwise private, unlike gOpcode::renderText's own area field which
+	// callers can read directly off the opcode.
+	const eRect &getArea() const { return area; }
+
 	enum
 	{
 		dirLeft, dirRight, dirCenter, dirBlock, dirCenterIfFits, dirBidi
@@ -216,6 +222,17 @@ public:
 		ASSERT(g >= 0);
 		ASSERT(g < (int)glyphs.size());
 		glyphs[g].flags |= f;
+	}
+
+	// Read back a glyph's flags. Used by gEGLDC::exec()'s renderPara
+	// handling (gegldc.cpp) to detect GS_INVERT'd glyphs, which must take
+	// the CPU fallback path in eTextPara::blit() (font.cpp) because invert
+	// is a flat color swap renderGlyph() can't express.
+	int getGlyphFlags(int g) const
+	{
+		ASSERT(g >= 0);
+		ASSERT(g < (int)glyphs.size());
+		return glyphs[g].flags;
 	}
 };
 

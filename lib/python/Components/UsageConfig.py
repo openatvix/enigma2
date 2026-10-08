@@ -61,7 +61,7 @@ def InitUsageConfig():
 		("keep", _("Keep service")),
 		("reverseB", _("Reverse bouquet buttons")),
 		("keep reverseB", _("Keep service") + " + " + _("Reverse bouquet buttons"))])
-	
+
 	config.usage.servicenum_fontsize = ConfigSelectionNumber(default=0, stepwidth=1, min=-8, max=10, wraparound=True)
 	config.usage.servicenum_fontsize.addNotifier(redrawServiceList, initial_call=False)
 	config.usage.servicename_fontsize = ConfigSelectionNumber(default=0, stepwidth=1, min=-8, max=10, wraparound=True)
@@ -151,7 +151,7 @@ def InitUsageConfig():
 	config.usage.leave_movieplayer_onExit = ConfigSelection(default="popup", choices=[
 		("no", _("no")), ("popup", _("With popup")), ("without popup", _("Without popup")), ("movielist", _("Return to movie list"))])
 
-	config.usage.setup_level = ConfigSelection(default="simple", choices=[
+	config.usage.setup_level = ConfigSelection(default="expert", choices=[
 		("simple", _("Normal")),
 		("intermediate", _("Advanced")),
 		("expert", _("Expert"))])
@@ -163,10 +163,9 @@ def InitUsageConfig():
 		("flat+remotegroups", _("Flat by key group on remote"))])
 
 	config.usage.startup_to_standby = ConfigSelection(default="no", choices=[
-		("no", _("No")),
-		("except", _("Yes, only wake-up timers")),
-		("yes", _("Yes, after cold start only")),
-		("restart", _("Yes, always"))])
+		("no", _("no")),
+		("yes", _("yes")),
+		("except", _("No, except Wakeup timer"))])
 
 	config.usage.wakeup_enabled = ConfigSelection(default="no", choices=[
 		("no", _("no")),
@@ -255,6 +254,35 @@ def InitUsageConfig():
 		("4", "DVB-T/-C/-S"),
 		("5", "DVB-T/-S/-C"),
 		("127", _("No priority"))])
+
+	config.usage.frontled_color = ConfigSelection(default="1", choices=[
+		("0", _("Off")),
+		("1", _("Blue")),
+		("2", _("Red")),
+		("3", _("Blinking blue")),
+		("4", _("Blinking red"))
+	])
+	config.usage.frontledrec_color = ConfigSelection(default="3", choices=[
+		("0", _("Off")),
+		("1", _("Blue")),
+		("2", _("Red")),
+		("3", _("Blinking blue")),
+		("4", _("Blinking red"))
+	])
+	config.usage.frontledstdby_color = ConfigSelection(default="0", choices=[
+		("0", _("Off")),
+		("1", _("Blue")),
+		("2", _("Red")),
+		("3", _("Blinking blue")),
+		("4", _("Blinking red"))
+	])
+	config.usage.frontledrecstdby_color = ConfigSelection(default="3", choices=[
+		("0", _("Off")),
+		("1", _("Blue")),
+		("2", _("Red")),
+		("3", _("Blinking blue")),
+		("4", _("Blinking red"))
+	])
 
 	def remote_fallback_changed(configElement):
 		if configElement.value:
@@ -487,7 +515,7 @@ def InitUsageConfig():
 		for i, d in enumerate(units):
 			if unit := int(number / d):
 				if i == 3:
-					return "%s" % (ngettext("%d minute", "%d minuts", unit) % unit)
+					return "%s" % (ngettext("%d minute", "%d minutes", unit) % unit)
 				elif i == 2:
 					return "%s" % (ngettext("%d hour", "%d hours", unit) % unit)
 				elif i == 1:
@@ -601,6 +629,12 @@ def InitUsageConfig():
 		config.misc.zapmode = ConfigSelection(default="mute", choices=[
 			("mute", _("Black screen")), ("hold", _("Hold screen")), ("mutetilllock", _("Black screen till locked")), ("holdtilllock", _("Hold till locked"))])
 		config.misc.zapmode.addNotifier(setZapmode, immediate_feedback=False)
+
+	if BoxInfo.getItem("ISDREAMBOX"):
+		def setZapmodeDM(el):
+			print('[UsageConfig] >>> zapmodeDM')
+		config.misc.zapmodeDM = ConfigSelection(default="hold", choices=[("black", _("Black screen")), ("hold", _("Hold screen"))])
+		config.misc.zapmodeDM.addNotifier(setZapmodeDM, immediate_feedback = False)
 
 	if BoxInfo.getItem("VFD_scroll_repeats"):
 		def scroll_repeats(el):
@@ -809,6 +843,27 @@ def InitUsageConfig():
 	config.autolanguage.subtitle_defaultdvb = ConfigYesNo(default=False)
 	config.autolanguage.subtitle_usecache = ConfigYesNo(default=True)
 
+	config.oscaminfo = ConfigSubsection()
+	if BoxInfo.getItem("OScamInstalled") or BoxInfo.getItem("NCamInstalled"):
+		config.oscaminfo.showInExtensions = ConfigYesNo(default=True)
+	else:
+		config.oscaminfo.showInExtensions = ConfigYesNo(default=False)
+	config.oscaminfo.userDataFromConf = ConfigYesNo(default=True)
+	config.oscaminfo.username = ConfigText(default="username", fixed_size=False, visible_width=12)
+	config.oscaminfo.password = ConfigPassword(default="password", fixed_size=False)
+	config.oscaminfo.ip = ConfigText(default="127.0.0.1", fixed_size=False)
+	config.oscaminfo.port = ConfigInteger(default=83, limits=(0, 65536))
+	config.oscaminfo.usessl = ConfigYesNo(default=False)
+	config.oscaminfo.verifycert = ConfigYesNo(default=False)
+	choiceList = [
+		(0, _("Disabled"))
+	] + [(x, ngettext("%d Second", "%d Seconds", x) % x) for x in (2, 5, 10, 20, 30)] + [(x * 60, ngettext("%d Minute", "%d Minutes", x) % x) for x in (1, 2, 3)]
+	config.oscaminfo.autoUpdate = ConfigSelection(default=10, choices=choiceList)
+	choiceList = [
+		(0, _("Disabled"))
+	] + [(x, ngettext("%d Second", "%d Seconds", x) % x) for x in (2, 5, 10, 20, 30)] + [(x * 60, ngettext("%d Minute", "%d Minutes", x) % x) for x in (1, 2, 3)]
+	config.oscaminfo.autoUpdateLog = ConfigSelection(default=0, choices=choiceList)
+
 	config.streaming = ConfigSubsection()
 	config.streaming.stream_ecm = ConfigYesNo(default=False)
 	config.streaming.descramble = ConfigYesNo(default=True)
@@ -826,19 +881,18 @@ def InitUsageConfig():
 	config.misc.softcam_streamrelay_url = ConfigIP(default=[127, 0, 0, 1], auto_jump=True)
 	config.misc.softcam_streamrelay_port = ConfigInteger(default=17999, limits=(0, 65535))
 	config.misc.softcam_streamrelay_delay = ConfigSelectionNumber(min=0, max=2000, stepwidth=50, default=100, wraparound=True)
-
-	config.misc.softcam_softcsa = ConfigSelection(default=0, choices=[
-		(0, _("Off")),
-		(1, _("Whitelist")),
-		(2, _("Auto"))
-	])
 	config.misc.softcam_use_softcsa = ConfigYesNo(default=False)
+	config.misc.softcam_softcsa = ConfigSelection(default="0", choices=[
+		("0", _("Disabled")),
+		("1", _("Enabled (whitelist)")),
+		("2", _("Enabled (auto)")),
+	])
 
 	config.softcsa = ConfigSubsection()
 	config.softcsa.decoderRelease = ConfigSelection(default=0, choices=[
-			(0, _("Quick")),
-			(1, _("Normal")),
-			(2, _("Aggressive"))
+		(0, _("Quick")),
+		(1, _("Normal")),
+		(2, _("Aggressive"))
 	])
 	config.softcsa.syncMode = ConfigSelection(default=0, choices=[
 		(0, _("Automatic")),
@@ -852,9 +906,9 @@ def InitUsageConfig():
 		default=0,
 		choices=[(0, _("Disabled"))] + [(x, _("%d ms") % x) for x in range(100, 2001, 100)]
 	)
-
+	config.softcsa.useStreamRelayWhitelist = ConfigYesNo(default=True)
 	config.streamrelay = ConfigSubsection()
-	config.streamrelay.useWhitelist = ConfigYesNo(default=False)
+	config.streamrelay.useWhitelist = ConfigYesNo(default=True)
 
 	config.ntp = ConfigSubsection()
 

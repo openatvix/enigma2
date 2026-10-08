@@ -38,6 +38,14 @@
 #include "bsod.h"
 #include "version_info.h"
 
+#include <string>
+
+#ifdef HAVE_EGL
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+#include <lib/gdi/egl/gles_version.h>
+#endif
+
 #ifdef OBJECT_DEBUG
 int object_total_remaining;
 
@@ -403,5 +411,49 @@ void dump_malloc_stats(void)
 #endif
 #else
 	eDebug("MALLOC: info not exposed");
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/* EGL / GLES version reporting for the About screen                   */
+/* ------------------------------------------------------------------ */
+/* These return the strings gEGLDC::tryInitEGL() captured on the       */
+/* render thread at the moment it first made the EGL context current.  */
+/*                                                                     */
+/* Live-querying EGL/GL from THIS thread (the main/eInit thread) does  */
+/* not work on the EGL backend: EGL contexts are bound per-thread and  */
+/* the main thread never has one current, so glGetString(GL_VERSION)  */
+/* returns NULL there; eglQueryString(EGL_NO_DISPLAY, EGL_VERSION) is  */
+/* also rejected by several closed-source drivers, and calling        */
+/* eglGetDisplay(EGL_DEFAULT_DISPLAY) from a second thread while the   */
+/* render thread already owns the display is at best a no-op and at    */
+/* worst returns a handle the driver refuses to answer queries against. */
+/*                                                                     */
+/* gles_version.h's globals are populated exactly once, by             */
+/* gEGLDC::tryInitEGL() (gegldc.cpp) immediately after a successful    */
+/* eglMakeCurrent() on the render thread, and never change after that  */
+/* - safe to read from any thread.                                     */
+/*                                                                     */
+/* In a non-EGL build (HAVE_EGL undefined) the same globals exist but  */
+/* are never populated, so these functions return an empty string and  */
+/* About.py simply omits the "EGL/GLES:" line - unchanged behaviour    */
+/* from before this fix.                                               */
+/* ------------------------------------------------------------------ */
+
+std::string getEGLVersionString()
+{
+#ifdef HAVE_EGL
+	return gles::eglVersionString;
+#else
+	return "";
+#endif
+}
+
+std::string getGLESVersionString()
+{
+#ifdef HAVE_EGL
+	return gles::glesVersionString;
+#else
+	return "";
 #endif
 }

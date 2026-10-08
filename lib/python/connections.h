@@ -27,11 +27,13 @@ inline PyObject *PyFrom(int v)
 
 inline PyObject *PyFrom(const char *c)
 {
-	return PyUnicode_FromString(c);
+	return c ? PyUnicode_FromString(c) : PyUnicode_FromString("");
 }
 
-inline PyObject *PyFrom(std::pair<const char*, int>& p)
+inline PyObject *PyFrom(const std::pair<const char *, int> &p)
 {
+	if (!p.first)
+		return PyBytes_FromStringAndSize("", 0);
 	return PyBytes_FromStringAndSize(p.first, p.second);
 }
 

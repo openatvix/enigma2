@@ -41,6 +41,29 @@ class FrontendInfo(Converter):
 		else:
 			self.type = self.LOCK
 
+	def getAGC(self):
+		agc = self.source.agc
+		# Si2166D/Si2169D frontends report a small bogus non-zero AGC
+		# value (seen: 89-124) instead of None, ignore it and fall
+		# through to the SNR-based estimate below.
+		if agc and agc > 255:
+			return agc
+		# Some frontends do not expose signal strength through either
+		# DTV_STAT_SIGNAL_STRENGTH or FE_READ_SIGNAL_STRENGTH.  Keep
+		# using the driver's value when available and estimate a
+		# display value from signal quality only as a fallback.
+		snr = self.source.snr
+		if not snr:
+			return agc
+		snrPercent = snr * 100.0 / 65535.0
+		if snrPercent < 35:
+			agcPercent = snrPercent * 1.8
+		elif snrPercent < 70:
+			agcPercent = 63 + ((snrPercent - 35) * 0.8)
+		else:
+			agcPercent = 91 + ((snrPercent - 70) * 0.3)
+		return round(min(100, agcPercent) * self.range / 100.0)  # In this case round() returns an integer.
+
 	@cached
 	def getText(self):
 		assert self.type not in (self.LOCK, self.SLOT_NUMBER), "the text output of FrontendInfo cannot be used for lock info"
@@ -54,7 +77,7 @@ class FrontendInfo(Converter):
 			else:
 				return _("N/A")
 		elif self.type == self.AGC:
-			percent = self.source.agc
+			percent = self.getAGC()
 		elif (self.type == self.SNR and not swapsnr) or (self.type == self.SNRdB and swapsnr):
 			percent = self.source.snr
 		elif self.type == self.SNR or self.type == self.SNRdB:
@@ -126,7 +149,7 @@ class FrontendInfo(Converter):
 	def getValue(self):
 		assert self.type != self.LOCK, "the value/range output of FrontendInfo can not be used for lock info"
 		if self.type == self.AGC:
-			return self.source.agc or 0
+			return self.getAGC() or 0
 		elif self.type == self.SNR:
 			return self.source.snr or 0
 		elif self.type == self.BER:

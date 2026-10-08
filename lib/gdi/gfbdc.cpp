@@ -5,14 +5,42 @@
 
 #include <lib/gdi/accel.h>
 
+#include <algorithm>
+#include <cstring>
+
 #include <time.h>
+#include <sys/time.h>
+
+#ifdef USE_LIBVUGLES2
+#include <vuplus_gles.h>
+#endif
+
+#ifdef HAVE_OSDANIMATION
+#include <lib/base/cfile.h>
+#endif
+
+#if defined(CONFIG_ION) || defined(CONFIG_HISILICON_FB)
+#include <lib/gdi/grc.h>
+
+extern bool bcm_accel_blit(
+		int src_addr, int src_width, int src_height, int src_stride, int src_format,
+		int dst_addr, int dst_width, int dst_height, int dst_stride,
+		int src_x, int src_y, int width, int height,
+		int dst_x, int dst_y, int dwidth, int dheight,
+		int pal_addr, int flags);
+#endif
+#ifdef HAVE_HISILICON_ACCEL
+extern void  dinobot_accel_register(void *p1,void *p2);
+extern void  dinibot_accel_notify(void);
+#endif
 
 gFBDC::gFBDC()
 {
 	fb=new fbClass;
-
+#ifndef CONFIG_ION
 	if (!fb->Available())
 		eFatal("[gFBDC] no framebuffer available");
+#endif
 
 	int xres;
 	int yres;
@@ -95,6 +123,29 @@ void gFBDC::setPalette()
 	fb->PutCMAP();
 }
 
+int gFBDC::getSurfaceOffset(const gUnmanagedSurface &s) const
+{
+	if (!s.data_phys)
+		return 0;
+
+	return (s.data_phys - fb->getPhysAddr()) / s.stride;
+}
+
+void gFBDC::rotateSurfaces()
+{
+	if (m_number_of_pages > 2 && surface_third.data_phys)
+	{
+		gUnmanagedSurface previously_displayed = surface_back;
+		surface_back = surface;
+		surface = surface_third;
+		surface_third = previously_displayed;
+	}
+	else if (surface_back.data_phys)
+	{
+		std::swap(surface, surface_back);
+	}
+}
+
 void gFBDC::exec(const gOpcode *o)
 {
 	switch (o->opcode)
@@ -107,6 +158,12 @@ void gFBDC::exec(const gOpcode *o)
 	}
 	case gOpcode::flip:
 	{
+#if defined(CONFIG_ION)
+		fb->setOffset(getSurfaceOffset(surface));
+
+		if (surface_back.data_phys)
+			rotateSurfaces();
+#else
 		if (surface_back.data_phys)
 		{
 			gUnmanagedSurface s(surface);
@@ -118,6 +175,7 @@ void gFBDC::exec(const gOpcode *o)
 			else
 				fb->setOffset(0);
 		}
+#endif
 		break;
 	}
 	case gOpcode::waitVSync:
@@ -143,8 +201,88 @@ void gFBDC::exec(const gOpcode *o)
 		break;
 	}
 	case gOpcode::flush:
+#ifdef USE_LIBVUGLES2
+		if (gles_is_animation())
+			gles_do_animation();
+		else
+			fb->blit();
+		gles_flush();
+#else
 		fb->blit();
+#endif
+#if defined(CONFIG_ION)
+		if (surface_back.data_phys)
+		{
+		fb->waitVSync();
+		fb->setOffset(getSurfaceOffset(surface));
+
+		rotateSurfaces();
+
+		bcm_accel_blit(
+		surface_back.data_phys, surface_back.x, surface_back.y, surface_back.stride, 0,
+		surface.data_phys, surface.x, surface.y, surface.stride,
+		0, 0, surface.x, surface.y,
+		0, 0, surface.x, surface.y,
+		0, 0);
+		}
+#endif
+#if defined(CONFIG_HISILICON_FB)
+		if(islocked()==0)
+		{
+			bcm_accel_blit(
+				surface.data_phys, surface.x, surface.y, surface.stride, 0,
+				surface_back.data_phys, surface_back.x, surface_back.y, surface_back.stride,
+				0, 0, surface.x, surface.y,
+				0, 0, surface.x, surface.y,
+				0, 0);
+		}
+#endif
+#ifdef HAVE_HISILICON_ACCEL
+		dinibot_accel_notify();
+#endif
 		break;
+	case gOpcode::sendShow:
+	{
+#ifdef HAVE_OSDANIMATION
+		CFile::writeIntHex("/proc/stb/fb/animation_mode", 0x01);
+#endif
+#ifdef USE_LIBVUGLES2
+		gles_set_buffer((unsigned int *)surface.data);
+		gles_set_animation(1, o->parm.setShowHideInfo->point.x(), o->parm.setShowHideInfo->point.y(), o->parm.setShowHideInfo->size.width(), o->parm.setShowHideInfo->size.height());
+#endif
+				break;
+	}
+	case gOpcode::sendHide:
+	{
+#ifdef HAVE_OSDANIMATION
+		CFile::writeIntHex("/proc/stb/fb/animation_mode", 0x10);
+#endif
+#ifdef USE_LIBVUGLES2
+		gles_set_buffer((unsigned int *)surface.data);
+		gles_set_animation(0, o->parm.setShowHideInfo->point.x(), o->parm.setShowHideInfo->point.y(), o->parm.setShowHideInfo->size.width(), o->parm.setShowHideInfo->size.height());
+#endif
+				break;
+	}
+#ifdef USE_LIBVUGLES2
+	case gOpcode::sendShowItem:
+	{
+		gles_set_buffer((unsigned int *)surface.data);
+		gles_set_animation_listbox(o->parm.setShowItemInfo->dir, o->parm.setShowItemInfo->point.x(), o->parm.setShowItemInfo->point.y(), o->parm.setShowItemInfo->size.width(), o->parm.setShowItemInfo->size.height());
+		delete o->parm.setShowItemInfo;
+		break;
+	}
+	case gOpcode::setFlush:	
+	{
+		gles_set_flush(o->parm.setFlush->enable);
+		delete o->parm.setFlush;
+		break;
+	}
+	case gOpcode::setView:
+	{
+		gles_viewport(o->parm.setViewInfo->size.width(), o->parm.setViewInfo->size.height(), fb->Stride());
+				break;
+	}
+#endif
 	default:
 		gDC::exec(o);
 		break;
@@ -177,31 +315,56 @@ void gFBDC::setGamma(int g)
 
 void gFBDC::setResolution(int xres, int yres, int bpp)
 {
-	if (m_pixmap && (surface.x == xres) && (surface.y == yres) && (surface.bpp == bpp))
+	if (m_pixmap && (surface.x == xres) && (surface.y == yres) && (surface.bpp == bpp)
+	#if defined(CONFIG_HISILICON_FB)
+		&& islocked()==0
+	#endif
+		)
 		return;
-
+#ifndef CONFIG_ION
 	if (gAccel::getInstance())
 		gAccel::getInstance()->releaseAccelMemorySpace();
-
+#else
+	gRC *grc = gRC::getInstance();
+	if (grc)
+		grc->lock();
+#endif
 	fb->SetMode(xres, yres, bpp);
+
+	unsigned char *base_addr = fb->lfb;
+	unsigned long base_phys = fb->getPhysAddr();
 
 	surface.x = xres;
 	surface.y = yres;
 	surface.bpp = bpp;
 	surface.bypp = bpp / 8;
 	surface.stride = fb->Stride();
-	surface.data = fb->lfb;
+	surface.data = base_addr;
 
-	surface.data_phys = fb->getPhysAddr();
+	for (int y=0; y<yres; y++)    // make whole screen transparent
+		memset(fb->lfb+ y * xres * 4, 0x00, xres * 4);
 
-	int fb_size = surface.stride * surface.y;
+	surface.data_phys = base_phys;
 
-	if (fb->getNumPages() > 1)
+	m_number_of_pages = fb->getNumPages();
+
+	int fb_page_size = surface.stride * surface.y;
+#ifndef CONFIG_ION
+	int fb_size = fb_page_size;
+#endif
+
+#if defined(CONFIG_ION)
+	if (m_number_of_pages > 1)
 	{
 		surface_back = surface;
-		surface_back.data = fb->lfb + fb_size;
-		surface_back.data_phys = surface.data_phys + fb_size;
-		fb_size *= 2;
+		// fb_size += fb_page_size;   // unused under CONFIG_ION
+
+		// the hardware starts on the first page; draw to the next one first
+		surface_back.data = base_addr;
+		surface_back.data_phys = base_phys;
+
+		surface.data = base_addr + fb_page_size;
+		surface.data_phys = base_phys + fb_page_size;
 	}
 	else
 	{
@@ -209,12 +372,47 @@ void gFBDC::setResolution(int xres, int yres, int bpp)
 		surface_back.data_phys = 0;
 	}
 
-	eDebug("[gFBDC] resolution: %dx%dx%d stride=%d, %dkB available for acceleration surfaces.",
-		 surface.x, surface.y, surface.bpp, fb->Stride(), (fb->Available() - fb_size)/1024);
+	if (m_number_of_pages > 2)
+	{
+		surface_third = surface;
+		surface_third.data = base_addr + fb_page_size * 2;
+		surface_third.data_phys = base_phys + fb_page_size * 2;
+		// fb_size += fb_page_size;   // unused under CONFIG_ION
+	}
+	else
+	{
+		surface_third.data = 0;
+		surface_third.data_phys = 0;
+	}
+#else
+	if (m_number_of_pages > 1)
+	{
+		surface_back = surface;
+		surface_back.data = base_addr + fb_page_size;
+		surface_back.data_phys = base_phys + fb_page_size;
+		fb_size = fb_page_size * 2;
+	}
+	else
+	{
+		surface_back.data = 0;
+		surface_back.data_phys = 0;
+	}
 
+        surface_third.data = 0;
+        surface_third.data_phys = 0;
+#endif
+
+	eDebug("[gFBDC] resolution: %d x %d x %d (stride: %d) pages: %d", surface.x, surface.y, surface.bpp, fb->Stride(), fb->getNumPages());
+
+#ifndef CONFIG_ION
+	/* accel is already set in fb.cpp */
+	eDebug("[gFBDC] %dkB available for acceleration surfaces.", (fb->Available() - fb_size)/1024);
 	if (gAccel::getInstance())
 		gAccel::getInstance()->setAccelMemorySpace(fb->lfb + fb_size, surface.data_phys + fb_size, fb->Available() - fb_size);
-
+#endif
+#ifdef HAVE_HISILICON_ACCEL
+	dinobot_accel_register(&surface,&surface_back);
+#endif
 	if (!surface.clut.data)
 	{
 		surface.clut.colors = 256;
@@ -223,8 +421,23 @@ void gFBDC::setResolution(int xres, int yres, int bpp)
 	}
 
 	surface_back.clut = surface.clut;
+	surface_third.clut = surface.clut;
+
+#if defined(CONFIG_HISILICON_FB)
+	if(islocked()==0)
+	{
+		gUnmanagedSurface s(surface);
+		surface = surface_back;
+		surface_back = s;
+	}
+#endif
 
 	m_pixmap = new gPixmap(&surface);
+
+#ifdef CONFIG_ION
+	if (grc)
+		grc->unlock();
+#endif
 }
 
 void gFBDC::saveSettings()
@@ -242,3 +455,59 @@ void gFBDC::reloadSettings()
 }
 
 eAutoInitPtr<gFBDC> init_gFBDC(eAutoInitNumbers::graphic-1, "GFBDC");
+
+#ifdef HAVE_OSDANIMATION
+void setAnimation_current(int a) {
+	switch (a) {
+		case 1:
+			CFile::writeStr("/proc/stb/fb/animation_current", "simplefade");
+			break;
+		case 2:
+			CFile::writeStr("/proc/stb/fb/animation_current", "simplezoom");
+			break;
+		case 3:
+			CFile::writeStr("/proc/stb/fb/animation_current", "growdrop");
+			break;
+		case 4:
+			CFile::writeStr("/proc/stb/fb/animation_current", "growfromleft");
+			break;
+		case 5:
+			CFile::writeStr("/proc/stb/fb/animation_current", "extrudefromleft");
+			break;
+		case 6:
+			CFile::writeStr("/proc/stb/fb/animation_current", "popup");
+			break;
+		case 7:
+			CFile::writeStr("/proc/stb/fb/animation_current", "slidedrop");
+			break;
+		case 8:
+			CFile::writeStr("/proc/stb/fb/animation_current", "slidefromleft");
+			break;
+		case 9:
+			CFile::writeStr("/proc/stb/fb/animation_current", "slidelefttoright");
+			break;
+		case 10:
+			CFile::writeStr("/proc/stb/fb/animation_current", "sliderighttoleft");
+			break;
+		case 11:
+			CFile::writeStr("/proc/stb/fb/animation_current", "slidetoptobottom");
+			break;
+		case 12:
+			CFile::writeStr("/proc/stb/fb/animation_current", "zoomfromleft");
+			break;
+		case 13:
+			CFile::writeStr("/proc/stb/fb/animation_current", "zoomfromright");
+			break;
+		case 14:
+			CFile::writeStr("/proc/stb/fb/animation_current", "stripes");
+			break;
+		default:
+			CFile::writeStr("/proc/stb/fb/animation_current", "disable");
+			break;
+	}
+}
+
+void setAnimation_speed(int speed) {
+	CFile::writeInt("/proc/stb/fb/animation_speed", speed);
+}
+#endif

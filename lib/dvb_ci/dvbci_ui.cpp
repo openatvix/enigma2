@@ -96,7 +96,9 @@ int eDVBCI_UI::getMMIState(int slot)
 
 int eDVBCI_UI::setClockRate(int slot, int rate)
 {
-	return eDVBCIInterfaces::getInstance()->setCIClockRate(slot, rate);
+	char rateStr[16];
+	snprintf(rateStr, sizeof(rateStr), "%d", rate);
+	return eDVBCIInterfaces::getInstance()->setCIClockRate(slot, rateStr);
 }
 
 int eDVBCI_UI::setEnabled(int slot, bool enabled)

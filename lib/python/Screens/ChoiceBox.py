@@ -13,7 +13,7 @@ config.misc.pluginlist.extension_order = ConfigText(default="")
 
 
 class ChoiceBox(Screen):
-	def __init__(self, session, title="", list=[], keys=None, selection=0, skin_name=[], reorderConfig="", windowTitle=None):
+	def __init__(self, session, title="", list=[], keys=None, selection=0, skin_name=[], reorderConfig="", windowTitle=None, titlebartext=None):
 		Screen.__init__(self, session)
 
 		if isinstance(skin_name, str):
@@ -32,6 +32,11 @@ class ChoiceBox(Screen):
 		self.list = []
 		self.summarylist = []
 		self.keymap = {}
+
+		if titlebartext is not None:
+			# print(f"[ChoiceBox] Warning: Deprecated argument 'titlebartext' found with a value of '{titlebartext}', use 'windowTitle' instead!")
+			if windowTitle is None:
+				windowTitle = titlebartext
 
 		if keys is None:
 			self.__keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "red", "green", "yellow", "blue"] + (len(list) - 14) * ["dummy"]

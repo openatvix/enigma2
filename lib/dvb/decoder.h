@@ -33,6 +33,7 @@ private:
 	ePtr<eDVBDemux> m_demux;
 	int m_fd, m_fd_demux, m_dev;
 	bool m_fcc_enable;
+	bool m_hold_on_zap;
 	static int m_close_invalidates_attributes;
 	int m_is_slow_motion, m_is_fast_forward, m_is_freezed;
 	ePtr<eSocketNotifier> m_sn;
@@ -43,8 +44,10 @@ private:
 public:
 	enum { UNKNOWN = -1, MPEG2, MPEG4_H264, VC1 = 3, MPEG4_Part2, VC1_SM, MPEG1, H265_HEVC, AVS = 16, AVS2 = 40 };
 	eDVBVideo(eDVBDemux *demux, int dev, bool fcc_enable=false);
-	void stop();
+	void stop();                      /* default: freeze last frame (hold) */
+	void stop(int freeze_last_frame); /* explicit control */
 	int startPid(int pid, int type=MPEG2);
+	int changePid(int pid, int type=MPEG2); /* reuse open fd, no destroy */
 	void flush();
 	void freeze();
 	int setSlowMotion(int repeat);
@@ -52,6 +55,10 @@ public:
 	void unfreeze();
 	int getPTS(pts_t &now);
 	virtual ~eDVBVideo();
+
+	bool holdOnZap() const { return m_hold_on_zap; }
+	void setHoldOnZap(bool v) { m_hold_on_zap = v; }
+
 	RESULT connectEvent(const sigc::slot<void(struct iTSMPEGDecoder::videoEvent)> &event, ePtr<eConnection> &conn);
 	int getWidth();
 	int getHeight();
@@ -113,6 +120,8 @@ private:
 	int m_state;
 	int m_ff_sm_ratio;
 	bool m_has_audio;
+	bool m_hold_on_zap;
+	void applyZapMode();
 	int setState();
 	ePtr<eConnection> m_demux_event_conn;
 	ePtr<eConnection> m_video_event_conn;
@@ -146,16 +155,6 @@ public:
 	RESULT setTextPID(int textpid);
 	RESULT setSyncMaster(int who);
 
-		/*
-		The following states exist:
-
-		 - stop: data source closed, no playback
-		 - pause: data source active, decoder paused
-		 - play: data source active, decoder consuming
-		 - decoder fast forward: data source linear, decoder drops frames
-		 - trickmode, highspeed reverse: data source fast forwards / reverses, decoder just displays frames as fast as it can
-		 - slow motion: decoder displays frames multiple times
-		*/
 	enum {
 		stateStop,
 		statePause,

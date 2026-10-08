@@ -49,6 +49,7 @@
 					<item key="language_setup" level="0" text="Language"><screen module="LanguageSelection"/></item>
 					<item key="timezone_setup" level="0" text="Timezone"><setup id="timezone"/></item>
 					<item key="user_interface" level="0" text="User interface"><setup id="userinterface"/></item>
+					<item key="channelselection_setup" level="0" text="Channel Selection"><setup id="channelselection"/></item>
 					<item key="primary_skin_selector" level="0" text="GUI Skin"><screen module="SkinSelector" screen="SkinSelector"/></item>
 					<item key="display_skin_selector" level="0" requires="FrontpanelDisplay" text="Display Skin"><screen module="SkinSelector" screen="LcdSkinSelector"/></item>
 				</menu>
@@ -75,19 +76,19 @@
 			</menu>
 			<menu key="cam" weight="10" text="SoftCam / CI">
 				<item key="softcam_setup" weight="10" level="0" text="Softcam Setup"><screen module="SoftcamSetup" screen="SoftcamSetup"/></item>
+				<item key="oscam_info" weight="10" level="0" text="OScam/Ncam Info"><screen module="OScamInfo" screen="OSCamInfo"/></item>
 				<item key="ci_setup" weight="10" level="0" text="Common Interface" requires="CommonInterface"><screen module="Ci" screen="CiSelection"/></item>
-				<item key="streamrelay_settings" weight="15" level="0" text="Oscam Streamrelay"><setup id="StreamRelay"/></item>
-				<item key="softcsa_settings" weight="15" level="0" text="iCAM descrambling" requires="HasSoftCSA"><setup id="SoftCSA"/></item>
+				<item key="softcsa_settings" weight="15" level="0" text="SoftCSA Settings" requires="HasSoftCSA"><setup id="SoftCSA"/></item>
 			</menu>
 			<item key="parental_setup" weight="15" level="0" text="Parental control"><screen module="ParentalControlSetup" screen="ParentalControlSetup"/></item>
 			<item key="factory_reset" weight="15" level="0" text="Factory reset"><screen module="FactoryReset" screen="FactoryReset"/></item>
 			<item key="flash_image" weight="15" level="0" text="Flash image" requires="canFlashWithOfgwrite" ><screen module="FlashImage" screen="SelectImage"/></item>
 			<item key="software_update" weight="15" level="0" text="Software update"><screen module="SoftwareUpdate" screen="UpdatePlugin"/></item>
 		</menu>
-		<menu key="shutdown" text="Standby / restart">
+		<menu key="shutdown" level="0" text="Standby / restart" weight="99">
 			<item key="sleep" text="Sleep timer"><screen module="SleepTimerEdit" screen="SleepTimerEdit"/></item>
 			<item key="standby" text="Standby"><screen module="Standby" screen="Standby"/></item>
-			<item key="restart" text="Restart"><screen module="Standby" screen="TryQuitMainloop">2</screen></item>
+			<item key="restart" text="Reboot"><screen module="Standby" screen="TryQuitMainloop">2</screen></item>
 			<item key="dualboot" weight="24" level="0" text="Switch to Android" requires="canDualBoot"><screen module="Standby" screen="SwitchToAndroid" /></item>
 			<item key="restart_enigma_debug" text="Restart enigma" requires="InDebugMode"><screen module="Standby" screen="TryQuitMainloop">6</screen></item>
 			<item key="restart_enigma" text="Restart enigma" requires="!InDebugMode"><screen module="Standby" screen="TryQuitMainloop">3</screen></item>
@@ -96,5 +97,6 @@
 			<item key="multiboot" text="Multiboot image selector" requires="canMultiBoot"><screen module="FlashImage" screen="MultibootSelection">1</screen></item>
 			<item key="deep_standby" text="Deep standby" requires="DeepstandbySupport"><screen module="Standby" screen="TryQuitMainloop">1</screen></item>
 			<item key="deep_standby" text="Shutdown" requires="!DeepstandbySupport"><screen module="Standby" screen="TryQuitMainloop">1</screen></item>
+			<item key="maintenance_mode" level="0" text="Recovery Mode" weight="55" requires="RecoveryMode"><screen module="Standby" screen="TryQuitMainloop">16</screen></item>
 		</menu>
 </menu>

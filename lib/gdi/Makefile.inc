@@ -5,6 +5,7 @@ gdi_libenigma_gdi_a_CXXFLAGS = $(LIBSDL_CFLAGS)
 gdi_libenigma_gdi_a_SOURCES = \
 	gdi/accel.cpp \
 	gdi/bcm.cpp \
+	gdi/color.cpp \
 	gdi/compositing.cpp \
 	gdi/drawing.cpp \
 	gdi/epng.cpp \
@@ -27,6 +28,7 @@ gdi_libenigma_gdi_a_SOURCES = \
 gdiincludedir = $(pkgincludedir)/lib/gdi
 gdiinclude_HEADERS = \
 	gdi/accel.h \
+	gdi/color.h \
 	gdi/compositing.h \
 	gdi/drawing.h \
 	gdi/epng.h \
@@ -46,6 +48,40 @@ gdiinclude_HEADERS = \
 	gdi/pixmapcache.h \
 	gdi/region.h
 
+if HAVE_EGL
+gdi_libenigma_gdi_a_SOURCES += \
+	gdi/gfont_atlas.cpp \
+	gdi/egl/egl_init.cpp \
+	gdi/egl/gegldc.cpp \
+	gdi/egl/gles_version.cpp \
+	gdi/egl/gosd_capture.cpp \
+	gdi/egl/gtexture_manager.cpp \
+	gdi/egl/shader/gadvanced_shader.cpp \
+	gdi/egl/shader/gshader.cpp \
+	gdi/egl/shader/gtext_shader.cpp \
+	gdi/egl/shader/gtexture_shader.cpp
+gdiinclude_HEADERS += \
+	gdi/gfont_atlas.h \
+	gdi/egl/gegldc.h \
+	gdi/egl/gles_version.h \
+	gdi/egl/gosd_capture.h \
+	gdi/egl/gtexture_manager.h \
+	gdi/egl/inative_window_provider.h \
+	gdi/egl/shader/gadvanced_shader.h \
+	gdi/egl/shader/gshader.h \
+	gdi/egl/shader/gtext_shader.h \
+	gdi/egl/shader/gtexture_shader.h
+endif
+
+if HAVE_DREAMBOX_EGL
+gdi_libenigma_gdi_a_SOURCES += \
+	gdi/egl/platform/dreambox/dreambox_window_provider.cpp
+gdiinclude_HEADERS += \
+	gdi/egl/platform/dreambox/dreambox_window_provider.h
+endif
+
+if HAVE_EGL
+else
 if HAVE_LIBSDL
 gdi_libenigma_gdi_a_SOURCES += \
 	gdi/sdl.cpp \
@@ -54,4 +90,5 @@ else
 gdi_libenigma_gdi_a_SOURCES += \
 	gdi/gfbdc.cpp \
 	gdi/gfbdc.h
+endif
 endif

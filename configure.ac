@@ -11,6 +11,7 @@ AC_SYS_LARGEFILE
 
 AC_PROG_CC
 AC_PROG_CXX
+PKG_PROG_PKG_CONFIG
 m4_ifdef([LT_INIT], [LT_INIT], [AC_PROG_LIBTOOL])
 AC_CONFIG_MACRO_DIR([m4])
 AC_OPENMP()
@@ -61,6 +62,90 @@ AM_CONDITIONAL(HAVE_TEMPFANCONTROL, test "$BOXTYPE" == dm8000 -o "$BOXTYPE" == d
 if test `echo "$BOXTYPE" | cut -b 1-2` == "dm"; then
 	AC_DEFINE(DREAMBOX, 1, [Dreambox hardware])
 	AC_DEFINE(KEY_PLAY_ACTUALLY_IS_KEY_PLAYPAUSE, 1,[define when rc sends a KEY_PLAY event for its KEY_PLAYPAUSE key])
+fi
+
+AM_CONDITIONAL(DM900, test "$BOXTYPE" == "dm900")
+AM_CONDITIONAL(DM920, test "$BOXTYPE" == "dm920")
+
+AS_IF([test "$BOXTYPE" == "dm900"],[AC_DEFINE(HWDM900, 1,[dm900])])
+AS_IF([test "$BOXTYPE" == "dm920"],[AC_DEFINE(HWDM920, 1,[dm920])])
+
+if test "$BOXTYPE" == "dm900" -o "$BOXTYPE" == "dm920"; then
+	AC_DEFINE(CONFIG_ION, 1,[define BOX use ION Allocator])
+	AC_DEFINE(HAVE_HDMIIN_DM, 1,[has hdmi in dm])
+	AC_DEFINE(LCD_DM900_Y_OFFSET, 4,[define LCD Y offset for dm900 and dm920])
+	AC_DEFINE(DREAMBOX_DUAL_TUNER, 1,[define it is dreambox dual tuner present])
+	AC_DEFINE(FORCE_ALPHABLENDING_ACCELERATION, 1,[define when the framebuffer acceleration has alphablending support, but detection slow down all])
+fi
+
+if test "$BOXTYPE" == "dm900"; then
+	AC_DEFINE(DM900, 1, [Dreambox hardware])
+fi
+
+if test "$BOXTYPE" == "dm920"; then
+	AC_DEFINE(DM920, 1, [Dreambox hardware])
+fi
+
+AC_ARG_WITH([egl],
+  AS_HELP_STRING([--with-egl], [enable EGL/GLES2/GLES3 backend]),
+  [],
+  [with_egl=auto])
+
+have_egl=no
+have_gles2=no
+have_gles3=no
+
+AS_IF([test "x$with_egl" != "xno"], [
+  PKG_CHECK_MODULES([EGL], [egl], [have_egl=yes], [have_egl=no])
+  PKG_CHECK_MODULES([GLES2], [glesv2], [have_gles2=yes], [have_gles2=no])
+])
+
+AS_IF([test "x$have_gles2" = "xyes"], [
+  saved_CPPFLAGS="$CPPFLAGS"
+  CPPFLAGS="$CPPFLAGS $GLES2_CFLAGS"
+  AC_CHECK_HEADERS([GLES3/gl3.h], [have_gles3=yes], [have_gles3=no])
+  CPPFLAGS="$saved_CPPFLAGS"
+])
+
+AS_IF([test "x$with_egl" = "xyes"], [
+  AS_IF([test "x$have_egl" != "xyes" -o "x$have_gles2" != "xyes"], [
+    AC_MSG_ERROR([--with-egl was given, but egl and/or glesv2 were not found])
+  ])
+])
+
+# Baseline requirement is EGL + GLESv2 - this alone decides use_egl.
+AS_IF([test "x$have_egl" = "xyes" -a "x$have_gles2" = "xyes"], [
+  AC_DEFINE([HAVE_EGL], [1], [Define if EGL/GLES2 support is available])
+  use_egl=yes
+], [
+  use_egl=no
+])
+
+# GLES3 is a strictly optional upgrade on top of that baseline - it must
+# only ever ADD the extra define, never downgrade use_egl back to no when
+# GLES3/gl3.h isn't available (a very common case: many SDKs ship EGL +
+# GLESv2 without GLES3 headers at all). Getting this wrong silently drops
+# the whole EGL backend for anyone without GLES3, with no error - it just
+# falls back to gfbdc/sdl as if --with-egl had never been requested.
+AS_IF([test "x$use_egl" = "xyes" -a "x$have_gles3" = "xyes"], [
+  AC_DEFINE([HAVE_GLES3], [1], [Define if GLES3 support is available])
+])
+
+AM_CONDITIONAL([HAVE_EGL], [test "x$use_egl" = "xyes"])
+
+AC_SUBST([EGL_CFLAGS])
+AC_SUBST([EGL_LIBS])
+AC_SUBST([GLES2_CFLAGS])
+AC_SUBST([GLES2_LIBS])
+
+# Dreambox's VC5/BEGL EGL stack (libvc5dream/libv3ddriver) only implements the
+# EGL_EXT_platform_base *pixmap* path (see lib/gdi/egl/platform/dreambox) - it
+# is unrelated to, and independent of, the FORCE_ALPHABLENDING_ACCELERATION
+# workaround below (that one is about the older 2D/bcm blit accelerator being
+# unreliable on these boxes, not about this GPU path).
+AM_CONDITIONAL(HAVE_DREAMBOX_EGL, test "x$use_egl" = "xyes" -a \( "$BOXTYPE" == "dm900" -o "$BOXTYPE" == "dm920" \))
+if test "x$use_egl" = "xyes" -a \( "$BOXTYPE" == "dm900" -o "$BOXTYPE" == "dm920" \); then
+	AC_DEFINE(HAVE_DREAMBOX_EGL, 1, [Dreambox VC5/BEGL EGL pixmap backend available])
 fi
 
 AC_ARG_WITH(hifblayer,
@@ -151,8 +236,8 @@ AM_CONDITIONAL(UPDATE_PO, test "$with_po" = "yes")
 
 AC_ARG_WITH(alsa,
 	AC_HELP_STRING([--with-alsa], [Enable ALSA support]),
-	[[with_alse=$withval]],
-	[[with_alse=no]]
+	[[with_alsa=$withval]],
+	[[with_alsa=no]]
 )
 if test x"$with_alsa" == xyes ; then
 	AC_DEFINE(HAVE_ALSA, 1,[Enables ALSA support])
@@ -257,7 +342,6 @@ AX_CHECK_COMPILE_FLAG([-Wattribute-alias], [CXXFLAGS="$CXXFLAGS -Wattribute-alia
 AX_CHECK_COMPILE_FLAG([-Wattribute-alias=1], [CXXFLAGS="$CXXFLAGS -Wattribute-alias=1"])
 
 CPPFLAGS="$CPPFLAGS $PYTHON_CPPFLAGS"
-CFLAGS="$CFLAGS -Wall"
 CXXFLAGS="$CXXFLAGS -Wall -Wextra -Werror \
 	-Wformat=2 -Wformat-overflow=2 -Wformat-nonliteral -Wformat-security \
 	-Wimplicit-fallthrough=5 -Wduplicated-branches -Wtrampolines \
@@ -272,7 +356,7 @@ CXXFLAGS="$CXXFLAGS -Wall -Wextra -Werror \
 	-Wno-error=stringop-truncation -Wno-error=shadow -Wno-error=cast-qual \
 	-Wno-error=aggregate-return -Wno-error=missing-field-initializers \
 	-Wno-error=packed -Wno-error=vla -Wno-error=clobbered -Wno-error=unused-parameter \
-	$BASE_CFLAGS $ENIGMA2_CFLAGS $PTHREAD_CFLAGS $OPENMP_CFLAGS $ALSA_CFLAGS"
+	$BASE_CFLAGS $ENIGMA2_CFLAGS $PTHREAD_CFLAGS $OPENMP_CFLAGS $ALSA_CFLAGS $GLES_CFLAGS $EGL_CFLAGS $GLES2_CFLAGS"
 
 ARFLAGS="cr"
 AC_SUBST(ARFLAGS)

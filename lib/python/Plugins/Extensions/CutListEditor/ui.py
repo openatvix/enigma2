@@ -2,16 +2,16 @@ from Screens.Screen import Screen
 from Screens.MessageBox import MessageBox
 from Components.ServicePosition import ServicePositionGauge
 from Components.ActionMap import HelpableActionMap
-from Components.MultiContent import MultiContentEntryText
+from Components.MultiContent import MultiContentEntryText  # noqa: F401
 from Components.ServiceEventTracker import ServiceEventTracker, InfoBarBase
 from Components.VideoWindow import VideoWindow
 from Components.Label import Label
 from Components.config import config, ConfigSubsection, ConfigYesNo
 from Screens.InfoBarGenerics import InfoBarSeek, InfoBarCueSheetSupport
-from enigma import getDesktop, gFont, iPlayableService, RT_HALIGN_RIGHT
+from enigma import getDesktop, gFont, iPlayableService, RT_HALIGN_RIGHT  # noqa: F401
 from Screens.FixedMenu import FixedMenu
 from Screens.HelpMenu import HelpableScreen
-from ServiceReference import ServiceReference
+from ServiceReference import ServiceReference  # noqa: F401
 from Components.Sources.List import List
 from Components.Console import Console
 from Screens.ChoiceBox import ChoiceBox
@@ -30,11 +30,11 @@ config.plugins.CutListEditor.keep_bookmarks = ConfigYesNo(default=False)
 
 
 def CutListEntry(where, what):
-	w = where / 90
+	w = where // 90
 	ms = w % 1000
-	s = (w / 1000) % 60
-	m = (w / 60000) % 60
-	h = w / 3600000
+	s = (w // 1000) % 60
+	m = (w // 60000) % 60
+	h = w // 3600000
 	if what == 0:
 		type = "IN"
 		type_col = 0x004000
@@ -68,7 +68,7 @@ class CutListContextMenu(FixedMenu):
 	SHOW_DELETECUT = 2
 
 	def __init__(self, session, state, nearmark):
-		menu = [(_("back"), self.close)] #, (None, )]
+		menu = [(_("back"), self.close)]  # , (None, )]
 
 		if state == self.SHOW_STARTCUT:
 			menu.append((_("start cut here"), self.startCut))
@@ -212,7 +212,7 @@ class CutListEditor(Screen, InfoBarBase, InfoBarSeek, InfoBarCueSheetSupport, He
 		desktopSize = getDesktop(0).size()
 		self["Video"] = VideoWindow(decoder=0, fb_width=desktopSize.width(), fb_height=desktopSize.height())
 
-		self["actions"] = HelpableActionMap(self, ["CutListEditorActions"],
+		self["actions"] = HelpableActionMap(self, "CutListEditorActions",
 			{
 				"setIn": (self.setIn, _("Make this mark an 'in' point")),
 				"setOut": (self.setOut, _("Make this mark an 'out' point")),
@@ -225,8 +225,8 @@ class CutListEditor(Screen, InfoBarBase, InfoBarSeek, InfoBarCueSheetSupport, He
 
 		self.onExecBegin.append(self.showTutorial)
 		self.__event_tracker = ServiceEventTracker(screen=self, eventmap={
-				iPlayableService.evCuesheetChanged: self.refillList
-			})
+			iPlayableService.evCuesheetChanged: self.refillList
+		})
 
 		# to track new entries we save the last version of the cutlist
 		self.last_cuts = self.getCutlist()
@@ -270,7 +270,7 @@ class CutListEditor(Screen, InfoBarBase, InfoBarSeek, InfoBarCueSheetSupport, He
 		self.uploadCuesheet()
 
 	def __addMark(self):
-		self.toggleMark(onlyadd=True, tolerance=90000) # do not allow two marks in <1s
+		self.toggleMark(onlyadd=True, tolerance=90000)  # do not allow two marks in <1s
 
 	def __removeMark(self):
 		m = self["cutlist"].getCurrent()
@@ -381,9 +381,9 @@ class CutListEditor(Screen, InfoBarBase, InfoBarSeek, InfoBarCueSheetSupport, He
 			in_after = None
 
 			for (where, what) in self.cut_list:
-				if what == 1 and where <= self.context_position: # out
+				if what == 1 and where <= self.context_position:  # out
 					out_before = (where, what)
-				elif what == 0 and where < self.context_position: # in, before out
+				elif what == 0 and where < self.context_position:  # in, before out
 					out_before = None
 				elif what == 0 and where >= self.context_position and in_after is None:
 					in_after = (where, what)

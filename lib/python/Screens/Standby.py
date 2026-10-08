@@ -28,9 +28,11 @@ QUIT_UPGRADE_FP = 4
 QUIT_ERROR_RESTART = 5
 QUIT_DEBUG_RESTART = 6
 QUIT_MANUFACTURER_RESET = 7
+QUIT_KODI = 15
 QUIT_MAINT = 16
 QUIT_UPGRADE_PROGRAM = 42
 QUIT_IMAGE_RESTORE = 43
+QUIT_RRECVERY_MODE = 45
 
 
 def isInfoBarInstance():
@@ -257,8 +259,10 @@ class QuitMainloopScreen(Screen):
 			QUIT_SHUTDOWN: _("Your receiver is shutting down"),
 			QUIT_REBOOT: _("Your receiver is rebooting"),
 			QUIT_RESTART: _("The user interface of your receiver is restarting"),
+			QUIT_KODI: _("The user interface of your receiver will be stopped to run Kodi"),
 			QUIT_UPGRADE_FP: _("Your frontprocessor will be updated\nPlease wait until your receiver reboots\nThis may take a few minutes"),
 			QUIT_DEBUG_RESTART: _("The user interface of your receiver is restarting in debug mode"),
+			QUIT_RRECVERY_MODE: _("Your receiver is rebooting into Recovery Mode"),
 			QUIT_UPGRADE_PROGRAM: _("Unattended update in progress\nPlease wait until your receiver reboots\nThis may take a few minutes"),
 			QUIT_MANUFACTURER_RESET: _("Manufacturer reset in progress\nPlease wait until enigma2 restarts")
 		}.get(retvalue)
@@ -287,7 +291,7 @@ def getReasons(session, retvalue=QUIT_SHUTDOWN):
 		reasons.append(_("You seem to be in timeshift!"))
 	if [stream for stream in eStreamServer.getInstance().getConnectedClients() if stream[0] != '127.0.0.1'] or StreamServiceList:
 		reasons.append(_("Client is streaming from this box!"))
-	if not reasons and mediafilesInUse(session) and retvalue in (QUIT_SHUTDOWN, QUIT_REBOOT, QUIT_UPGRADE_FP, QUIT_UPGRADE_PROGRAM):
+	if not reasons and mediafilesInUse(session) and retvalue in (QUIT_SHUTDOWN, QUIT_REBOOT, QUIT_KODI, QUIT_UPGRADE_FP, QUIT_UPGRADE_PROGRAM):
 		reasons.append(_("A file from media is in use!"))
 	return "\n".join(reasons)
 
@@ -302,8 +306,10 @@ class TryQuitMainloop(MessageBox):
 				QUIT_SHUTDOWN: _("Really shutdown now?"),
 				QUIT_REBOOT: _("Really reboot now?"),
 				QUIT_RESTART: _("Really restart now?"),
+				QUIT_KODI: _("Really start Kodi and stop user interface now?"),
 				QUIT_UPGRADE_FP: _("Really update the frontprocessor and reboot now?"),
 				QUIT_DEBUG_RESTART: _("Really restart in debug mode now?"),
+				QUIT_RRECVERY_MODE: _("Really reboot into Recovery Mode now?"),
 				QUIT_UPGRADE_PROGRAM: _("Really update your settop box and reboot now?"),
 				QUIT_MANUFACTURER_RESET: _("Really perform a manufacturer reset now?")
 			}.get(retvalue, None)

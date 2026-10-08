@@ -4,8 +4,12 @@
 #include <lib/gdi/font.h>
 #include <lib/base/init.h>
 #include <lib/base/init_num.h>
+#include <lib/base/nconfig.h>
 #ifdef USE_LIBVUGLES2
 #include <vuplus_gles.h>
+#endif
+#ifdef HAVE_EGL
+#include <lib/gdi/egl/gegldc.h>
 #endif
 
 
@@ -20,18 +24,17 @@ gRC *gRC::instance = 0;
 
 gRC::gRC() : rp(0), wp(0)
 #ifdef SYNC_PAINT
-,m_notify_pump(eApp, 0)
+			 ,
+			 m_notify_pump(eApp, 0)
 #else
-,m_notify_pump(eApp, 1)
+			 ,
+			 m_notify_pump(eApp, 1)
 #endif
 			 ,
 			 m_spinner_enabled(0), m_spinneronoff(1), m_prev_idle_count(0) // NOSONAR
 {
 	ASSERT(!instance);
-	instance=this;
-	m_prev_idle_count = -1;
-	m_spinner_enabled = 0;
-	m_spinneronoff = 1;
+	instance = this;
 	CONNECT(m_notify_pump.recv_msg, gRC::recv_notify);
 #ifndef SYNC_PAINT
 	pthread_mutex_init(&mutex, 0);
@@ -128,6 +131,17 @@ void *gRC::thread()
 	{
 		gles_state_open();
 		gles_viewport(720, 576, 720 * 4);
+	}
+#endif
+#ifdef HAVE_EGL
+	// EGL contexts are bound per-thread via eglMakeCurrent(); this is the
+	// thread that actually executes every render opcode (o.dc->exec(&o)
+	// below), so the context must be made current here, not on the
+	// eInit/main thread that constructs gEGLDC (see egl_init.cpp).
+	if (gEGLDC::getInstance() && !gEGLDC::getInstance()->isInitialized())
+	{
+		if (!gEGLDC::getInstance()->initEGL())
+			eDebug("[gRC] gEGLDC::initEGL() failed on render thread.");
 	}
 #endif
 #ifndef SYNC_PAINT
@@ -227,6 +241,27 @@ void *gRC::thread()
 #endif
 		}
 	}
+#ifdef USE_LIBVUGLES2
+	gles_state_close();
+	gles_close();
+#endif
+#ifdef HAVE_EGL
+	// Mirror the initEGL() call at the top of this function: EGL contexts
+	// are per-thread, and this is the thread the context was made current
+	// on, so it must also be torn down here, before this thread exits -
+	// not later from gEGLDC's destructor, which normally runs on a
+	// different thread (eInit's teardown, on the main thread) well after
+	// this thread has already terminated. gRC's own AutoInit priority
+	// (eAutoInitNumbers::graphic) is higher than gEGLDCAutoInit's
+	// (graphic-1), so LIFO close order tears gRC down - joining this
+	// thread - before gEGLDCAutoInit::closeNow() ever runs; by then there
+	// is no longer any thread left where eglMakeCurrent()/eglDestroyContext()
+	// etc. would be valid to call, which is what crashed the closed-source
+	// EGL driver on shutdown (segfault right after "gEGLDC" in the eInit
+	// teardown log, immediately following Ctrl+C).
+	if (gEGLDC::getInstance() && gEGLDC::getInstance()->isInitialized())
+		gEGLDC::getInstance()->cleanupEGL();
+#endif
 #ifndef SYNC_PAINT
 	pthread_exit(0);
 #endif
@@ -419,6 +454,10 @@ void gPainter::renderText(const eRect &pos, const std::string &string, int flags
 	o.parm.renderText->flags = flags;
 	o.parm.renderText->border = border;
 	o.parm.renderText->bordercolor = bordercolor;
+	o.parm.renderText->markedpos = markedpos;
+	o.parm.renderText->offset = offset;
+	if (markedpos >= 0)
+		o.parm.renderText->scrollpos = eConfigManager::getConfigIntValue("config.usage.cursorscroll");
 	m_rc->submit(o);
 }
 
@@ -505,7 +544,7 @@ void gPainter::blit(gPixmap *pixmap, const eRect &pos, const eRect &clip, int fl
 	m_rc->submit(o);
 }
 
-void gPainter::drawRectangle(const eRect &area) {
+void gPainter::drawRectangle(const eRect &area, bool useNew) {
 	if ( m_dc->islocked() )
 		return;
 	gOpcode o;
@@ -513,7 +552,20 @@ void gPainter::drawRectangle(const eRect &area) {
 	o.dc = m_dc.grabRef();
 	o.parm.rectangle = new gOpcode::para::prectangle;
 	o.parm.rectangle->area = area;
+	o.parm.rectangle->useNew = useNew;
 	m_rc->submit(o);
+}
+
+bool gPainter::usingGLES() const {
+#ifdef HAVE_EGL
+	// Same instance/init check as gRC::thread()'s own gEGLDC use above -
+	// getInstance() is a plain static accessor (not virtual), so this has no
+	// effect on gDC/gMainDC's vtable layout, unlike a would-be gDC::isGLES()
+	// virtual reachable from every backend's header.
+	return gEGLDC::getInstance() && gEGLDC::getInstance()->isInitialized();
+#else
+	return false;
+#endif
 }
 
 void gPainter::setPalette(gRGB *colors, int start, int len)
@@ -836,15 +888,23 @@ void gDC::exec(const gOpcode *o)
 	{
 		ePtr<eTextPara> para = new eTextPara(o->parm.renderText->area);
 		int flags = o->parm.renderText->flags;
+		int border = o->parm.renderText->border;
+		int markedpos = o->parm.renderText->markedpos;
+		if (markedpos != -1)
+			border = 0;
+		(void)border; // silence -Werror=unused-but-set-variable
 		ASSERT(m_current_font);
 		para->setFont(m_current_font);
+
+		std::string dots = reinterpret_cast<const char*>(u8"…");
 
 		if (flags & gPainter::RT_ELLIPSIS)
 		{
 			if (flags & gPainter::RT_WRAP) // Remove wrap
 				flags -= gPainter::RT_WRAP;
 			std::string text = o->parm.renderText->text;
-			text += u8"…";
+
+			text += dots;
 
 			eTextPara testpara(o->parm.renderText->area);
 			testpara.setFont(m_current_font);
@@ -859,7 +919,7 @@ void gDC::exec(const gOpcode *o)
 				if ((int)text.size() > ns)
 				{
 					text.resize(ns);
-					text += u8"…";
+					text += dots;
 				}
 				if (o->parm.renderText->text)
 					free(o->parm.renderText->text);
@@ -902,7 +962,7 @@ void gDC::exec(const gOpcode *o)
 		}
 
 		para->setBlend(flags & gPainter::RT_BLEND);
-		
+
 		if (o->parm.renderText->border)
 		{
 			para->blit(*this, offset, m_background_color_rgb, o->parm.renderText->bordercolor, true);
@@ -979,13 +1039,14 @@ void gDC::exec(const gOpcode *o)
 	{
 		o->parm.rectangle->area.moveBy(m_current_offset);
 		gRegion clip = m_current_clip & o->parm.rectangle->area;
-		m_pixmap->drawRectangle(clip, o->parm.rectangle->area, m_background_color_rgb, m_border_color, m_border_width, m_gradient_colors, m_gradient_orientation, m_radius, m_radius_edges, m_gradient_alphablend, m_gradient_fullSize);
+		m_pixmap->drawRectangle(clip, o->parm.rectangle->area, m_background_color_rgb, m_border_color, m_border_width, m_gradient_colors, m_gradient_orientation, m_radius, m_radius_edges, m_gradient_alphablend, m_gradient_fullSize, o->parm.rectangle->useNew);
 		m_border_width = 0;
 		m_radius = 0;
 		m_radius_edges = 0;
 		m_gradient_orientation = 0;
 		m_gradient_fullSize = 0;
 		m_gradient_alphablend = false;
+		m_gradient_colors.clear();
 		delete o->parm.rectangle;
 		break;
 	}
@@ -1109,8 +1170,6 @@ void gDC::incrementSpinner()
 
 #if 0
 	int i;
-	static int blub;
-	blub++;
 
 	for (i = 0; i < 5; ++i)
 	{

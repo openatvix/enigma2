@@ -3,7 +3,9 @@
 #include <fcntl.h>
 
 #include <lib/base/cfile.h>
+#include <lib/base/estring.h>
 #include <lib/base/wrappers.h>
+#include <lib/gdi/picexif.h>
 #include <lib/gdi/picload.h>
 
 extern "C" {
@@ -29,6 +31,80 @@ static std::string getSize(const char* file)
 	if (stat64(file, &s) < 0)
 		return "";
 	return std::to_string((long)(s.st_size / 1024)) + " kB";
+}
+
+static int convert_8Bit_to_24Bit(Cfilepara *filepara, unsigned char *dest)
+{
+	if( (!filepara) || (!dest))
+		return -1;
+
+	unsigned char *src = filepara->pic_buffer;
+	gRGB * palette     = filepara->palette;
+	int pixel_cnt      = filepara->ox * filepara->oy;
+
+	if( (!src) || (!palette) || (!pixel_cnt))
+		return -1;
+
+	for( int i = 0; i < pixel_cnt; i++)
+	{
+		*dest++ = palette[*src].r;
+		*dest++ = palette[*src].g;
+		*dest++ = palette[*src++].b;
+	}
+	return 0;
+}
+
+static unsigned char *simple_resize_32(unsigned char *orgin, int ox, int oy, int dx, int dy)
+{
+	unsigned char *cr = new unsigned char[dx * dy * 4];
+	if (cr == NULL)
+	{
+		eDebug("[ePicLoad] Error malloc");
+		return orgin;
+	}
+	const int stride = 4 * dx;
+	#pragma omp parallel for
+	for (int j = 0; j < dy; ++j)
+	{
+		unsigned char* k = cr + (j * stride);
+		const unsigned char* p = orgin + (j * oy / dy * ox) * 4;
+		for (int i = 0; i < dx; i++)
+		{
+			const unsigned char* ip = p + (i * ox / dx) * 4;
+			*k++ = ip[0];
+			*k++ = ip[1];
+			*k++ = ip[2];
+			*k++ = ip[3];
+		}
+	}
+	delete [] orgin;
+	return cr;
+}
+
+static unsigned char *simple_resize_24(unsigned char *orgin, int ox, int oy, int dx, int dy)
+{
+	unsigned char *cr = new unsigned char[dx * dy * 3];
+	if (cr == NULL)
+	{
+		eDebug("[ePicLoad] Error malloc");
+		return orgin;
+	}
+	const int stride = 3 * dx;
+	#pragma omp parallel for
+	for (int j = 0; j < dy; ++j)
+	{
+		unsigned char* k = cr + (j * stride);
+		const unsigned char* p = orgin + (j * oy / dy * ox) * 3;
+		for (int i = 0; i < dx; i++)
+		{
+			const unsigned char* ip = p + (i * ox / dx) * 3;
+			*k++ = ip[0];
+			*k++ = ip[1];
+			*k++ = ip[2];
+		}
+	}
+	delete [] orgin;
+	return cr;
 }
 
 static unsigned char *simple_resize_8(unsigned char *orgin, int ox, int oy, int dx, int dy)
@@ -359,93 +435,155 @@ static unsigned char *bmp_load(const char *file,  int *x, int *y)
 
 //---------------------------------------------------------------------
 
-static void png_load(Cfilepara* filepara, int background, bool forceRGB=false)
-{
+static void png_load(Cfilepara* filepara, uint32_t background, bool forceRGB = false) {
 	png_uint_32 width, height;
-	unsigned int i;
 	int bit_depth, color_type, interlace_type;
-	png_byte *fbptr;
+	png_byte* fbptr;
 	CFile fh(filepara->file, "rb");
 	if (!fh)
 		return;
 
 	png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-	if (png_ptr == NULL)
+	if (!png_ptr) {
+		eDebug("[ePicLoad] Error png_create_read_struct");
 		return;
+	}
 	png_infop info_ptr = png_create_info_struct(png_ptr);
-	if (info_ptr == NULL)
-	{
+	if (!info_ptr) {
+		eDebug("[ePicLoad] Error png_create_info_struct");
 		png_destroy_read_struct(&png_ptr, (png_infopp)NULL, (png_infopp)NULL);
 		return;
 	}
 
-	if (setjmp(png_jmpbuf(png_ptr)))
-	{
+	if (setjmp(png_jmpbuf(png_ptr))) {
+		eDebug("[ePicLoad] Error setjmp");
 		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 		return;
 	}
 
 	png_init_io(png_ptr, fh);
 
+	// Read header
 	png_read_info(png_ptr, info_ptr);
 	png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, &interlace_type, NULL, NULL);
+	int pixel_cnt = width * height;
 
-	if (!forceRGB && (color_type == PNG_COLOR_TYPE_GRAY || color_type & PNG_COLOR_MASK_PALETTE))
-	{
+	filepara->ox = width;
+	filepara->oy = height;
+
+	// Determine transparency: either alpha channel present (any color type with alpha)
+	// or tRNS chunk present (indexed or single-color transparency).
+	filepara->transparent = false;
+	if (color_type & PNG_COLOR_MASK_ALPHA) {
+		// any color type that has an alpha channel (GRAY_ALPHA or RGB_ALPHA)
+		filepara->transparent = true;
+		filepara->bits = 32; // treat as RGBA-capable
+	} else if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
+		// tRNS present => logical transparency exists (palette entries or single transparent color)
+		filepara->transparent = true;
+		// NOTE: keep bits as-is for paletted/grayscale (we may want to keep 8-bit indexed)
+	}
+	
+	// When we have indexed (8bit) PNG convert it to standard 32bit png so to preserve transparency and to allow proper alphablending
+	// This allow to prevent greenish background on some rendering surfaces.
+	if (color_type == PNG_COLOR_TYPE_PALETTE && bit_depth == 8) {
+		color_type = PNG_COLOR_TYPE_RGBA;
+		png_set_expand(png_ptr);
+		png_set_palette_to_rgb(png_ptr);
+		png_set_tRNS_to_alpha(png_ptr);
+		bit_depth = 32;
+		eDebug("[ePicLoad] Interlaced PNG 8bit -> 32bit");
+	}
+
+	// Case 1: Indexed / grayscale (<= 8bit)
+	if ((bit_depth <= 8) && (color_type == PNG_COLOR_TYPE_GRAY || color_type & PNG_COLOR_MASK_PALETTE)) {
 		if (bit_depth < 8)
-		{
-			png_set_packing(png_ptr);
-			bit_depth = 8;
-		}
-		unsigned char *pic_buffer = new unsigned char[height * width];
-		filepara->ox = width;
-		filepara->oy = height;
-		filepara->pic_buffer = pic_buffer;
-		filepara->bits = 8;
+			png_set_packing(png_ptr); // expand to full bytes
 
-		png_bytep *rowptr=new png_bytep[height];
-		for (unsigned int i=0; i!=height; i++)
-		{
-			rowptr[i]=(png_byte*)pic_buffer;
-			pic_buffer += width;
+		unsigned char* pic_buffer = new unsigned char[pixel_cnt];
+		if (!pic_buffer) {
+			eDebug("[ePicLoad] Error malloc");
+			png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+			return;
 		}
-		png_read_rows(png_ptr, rowptr, 0, height);
-		delete [] rowptr;
 
-		if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE))
-		{
-			png_color *palette;
+		int number_passes = 1;
+		if (interlace_type != PNG_INTERLACE_NONE) {
+			number_passes = png_set_interlace_handling(png_ptr);
+			eDebug("[ePicLoad] PNG interlaced, using %d passes", number_passes);
+		}
+		png_read_update_info(png_ptr, info_ptr);
+
+		// Read rows
+		for (int pass = 0; pass < number_passes; pass++) {
+			fbptr = (png_byte*)pic_buffer;
+			for (unsigned int i = 0; i < height; i++, fbptr += width)
+				png_read_row(png_ptr, fbptr, NULL);
+		}
+
+		// Handle palette or grayscale expansion
+		if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)) {
+			png_color* palette;
 			int num_palette;
 			png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette);
 			filepara->palette_size = num_palette;
 			if (num_palette)
 				filepara->palette = new gRGB[num_palette];
-			for (int i=0; i<num_palette; i++)
-			{
-				filepara->palette[i].a=0;
-				filepara->palette[i].r=palette[i].red;
-				filepara->palette[i].g=palette[i].green;
-				filepara->palette[i].b=palette[i].blue;
+
+			// Get tRNS data if present
+			png_bytep trans = NULL;
+			int num_trans = 0;
+			png_get_tRNS(png_ptr, info_ptr, &trans, &num_trans, 0);
+
+			for (int i = 0; i < num_palette; i++) {
+				filepara->palette[i].r = palette[i].red;
+				filepara->palette[i].g = palette[i].green;
+				filepara->palette[i].b = palette[i].blue;
+				filepara->palette[i].a = (i < num_trans) ? (255 - trans[i]) : 0;
 			}
-			if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
-			{
-				png_byte *trans;
-				png_get_tRNS(png_ptr, info_ptr, &trans, &num_palette, 0);
-				for (int i=0; i<num_palette; i++)
-					filepara->palette[i].a=255-trans[i];
+		} else {
+			// No palette, build grayscale ramp
+			int c_cnt = 1 << bit_depth;
+			filepara->palette_size = c_cnt;
+			filepara->palette = new gRGB[c_cnt];
+
+			if (bit_depth == 8) {
+				for (int i = 0; i < 256; i++) {
+					filepara->palette[i].r = i;
+					filepara->palette[i].g = i;
+					filepara->palette[i].b = i;
+					filepara->palette[i].a = 0;
+				}
+			} else {
+				int c_step = 255 / (c_cnt - 1);
+				for (int i = 0; i < c_cnt; i++) {
+					int val = i * c_step;
+					filepara->palette[i].r = val;
+					filepara->palette[i].g = val;
+					filepara->palette[i].b = val;
+					filepara->palette[i].a = 0;
+				}
 			}
 		}
+
+		filepara->pic_buffer = pic_buffer;
+		filepara->bits = 8;
+		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 	}
-	else
-	{
+	// Case 2: Truecolor / RGBA
+	else {
 		if (bit_depth == 16)
 			png_set_strip_16(png_ptr);
+
 		if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
 			png_set_gray_to_rgb(png_ptr);
-		if (color_type & PNG_COLOR_MASK_PALETTE)
-			png_set_palette_to_rgb(png_ptr);
-		if (color_type & PNG_COLOR_MASK_ALPHA || png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
-		{
+
+		if ((color_type == PNG_COLOR_TYPE_PALETTE) || (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) ||
+			(png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) && !(color_type & PNG_COLOR_MASK_ALPHA))) {
+			png_set_expand(png_ptr);
+		}
+
+		if (forceRGB && (color_type & PNG_COLOR_MASK_ALPHA)) {
 			png_set_strip_alpha(png_ptr);
 			png_color_16 bg;
 			bg.red = (background >> 16) & 0xFF;
@@ -455,28 +593,85 @@ static void png_load(Cfilepara* filepara, int background, bool forceRGB=false)
 			bg.index = 0;
 			png_set_background(png_ptr, &bg, PNG_BACKGROUND_GAMMA_SCREEN, 0, 1.0);
 		}
+
+		int number_passes = 1;
+		if (interlace_type != PNG_INTERLACE_NONE) {
+			number_passes = png_set_interlace_handling(png_ptr);
+			eDebug("[ePicLoad] PNG interlaced, using %d passes", number_passes);
+		}
 		png_read_update_info(png_ptr, info_ptr);
 
-		if (width * 3 != png_get_rowbytes(png_ptr, info_ptr))
-		{
+		int bpp = png_get_rowbytes(png_ptr, info_ptr) / width;
+		eTrace("[ePicLoad] RGB data from PNG file int bpp %x)", bpp);
+		if ((bpp != 4) && (bpp != 3)) {
 			eDebug("[ePicLoad] Error processing (did not get RGB data from PNG file)");
 			png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 			return;
 		}
 
-		unsigned char *pic_buffer = new unsigned char[height * width * 3];
-		filepara->ox = width;
-		filepara->oy = height;
-		filepara->pic_buffer = pic_buffer;
+		unsigned char* pic_buffer = new unsigned char[pixel_cnt * bpp];
+		if (!pic_buffer) {
+			eDebug("[ePicLoad] Error malloc");
+			png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+			return;
+		}
 
-		int number_passes = png_set_interlace_handling(png_ptr);
-		for(int pass = 0; pass < number_passes; pass++)
-		{
-			fbptr = (png_byte *)pic_buffer;
-			for (i = 0; i < height; i++, fbptr += width * 3)
+		// Read rows
+		for (int pass = 0; pass < number_passes; pass++) {
+			fbptr = (png_byte*)pic_buffer;
+			for (unsigned int i = 0; i < height; i++, fbptr += width * bpp)
 				png_read_row(png_ptr, fbptr, NULL);
 		}
 		png_read_end(png_ptr, info_ptr);
+		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+
+		// Assign output
+		if (bpp == 4 && filepara->transparent) {
+			filepara->bits = 32;
+			filepara->pic_buffer = pic_buffer;
+		} else if (bpp == 4) {
+			// Precompute blend table (static, initialized once)
+			static bool blend_init = false;
+			static unsigned char blend_table[256][256];
+			if (!blend_init) {
+				for (int a = 0; a < 256; ++a) {
+					for (int c = 0; c < 256; ++c) {
+						blend_table[a][c] = (unsigned char)((c * a + 127) / 255);
+					}
+				}
+				blend_init = true;
+			}
+
+			// Convert RGBA -> RGB using background color
+			unsigned char* pic_buffer24 = new unsigned char[pixel_cnt * 3];
+			if (!pic_buffer24) {
+				eDebug("[ePicLoad] Error malloc");
+				delete[] pic_buffer;
+				return;
+			}
+
+			unsigned char* src = pic_buffer;
+			unsigned char* dst = pic_buffer24;
+			int bg_r = (background >> 16) & 0xFF;
+			int bg_g = (background >> 8) & 0xFF;
+			int bg_b = background & 0xFF;
+			for (int i = 0; i < pixel_cnt; i++) {
+				int r = *src++;
+				int g = *src++;
+				int b = *src++;
+				int a = *src++;
+
+				*dst++ = blend_table[a][r] + blend_table[255 - a][bg_r];
+				*dst++ = blend_table[a][g] + blend_table[255 - a][bg_g];
+				*dst++ = blend_table[a][b] + blend_table[255 - a][bg_b];
+			}
+			delete[] pic_buffer;
+			filepara->pic_buffer = pic_buffer24;
+			filepara->bits = 24;
+		} else {
+			filepara->pic_buffer = pic_buffer;
+			filepara->bits = 24;
+		}
 	}
 }
 
@@ -807,8 +1002,8 @@ ePicLoad::ePicLoad():
 	m_exif(NULL),
 	threadrunning(false),
 	m_conf(),
-	msg_thread(this,1),
-	msg_main(eApp,1)
+	msg_thread(this,1),   // ← now 2 arguments
+	msg_main(eApp,1)      // ← now 2 arguments
 {
 	CONNECT(msg_thread.recv_msg, ePicLoad::gotMessage);
 	CONNECT(msg_main.recv_msg, ePicLoad::gotMessage);
@@ -950,7 +1145,7 @@ void ePicLoad::decodeThumb()
 	{
 		case F_PNG:	png_load(m_filepara, m_conf.background, true);
 				break;
-		case F_JPEG: m_filepara->pic_buffer = jpeg_load(m_filepara->file, &m_filepara->ox, &m_filepara->oy, m_filepara->max_x, m_filepara->max_y);
+		case F_JPEG:	m_filepara->pic_buffer = jpeg_load(m_filepara->file, &m_filepara->ox, &m_filepara->oy, m_filepara->max_x, m_filepara->max_y);
 				break;
 		case F_BMP:	m_filepara->pic_buffer = bmp_load(m_filepara->file, &m_filepara->ox, &m_filepara->oy);
 				break;
@@ -995,10 +1190,64 @@ void ePicLoad::decodeThumb()
 			m_filepara->ox = imx;
 			m_filepara->oy = imy;
 
-			if (jpeg_save(cachefile.c_str(), m_filepara->ox, m_filepara->oy, m_filepara->pic_buffer))
-				eDebug("[ePicLoad] getThumb: error saving cachefile");
+			if (m_filepara->bits == 8)
+			{
+				unsigned char * tmp = new unsigned char [m_filepara->ox * m_filepara->oy * 3];
+				if(tmp)
+				{
+					if(!convert_8Bit_to_24Bit(m_filepara, tmp))
+					{
+						if(jpeg_save(cachefile.c_str(), m_filepara->ox, m_filepara->oy, tmp))
+							eDebug("[ePicLoad] error saving cachefile");
+					}
+					else
+						eDebug("[ePicLoad] error saving cachefile");
+					delete [] tmp;
+				}
+				else
+					eDebug("[ePicLoad] Error malloc");
+			}
+			else
+				if(jpeg_save(cachefile.c_str(), m_filepara->ox, m_filepara->oy, m_filepara->pic_buffer))
+					eDebug("[ePicLoad] getThumb: error saving cachefile");
 		}
+		resizePic();
 	}
+}
+
+void ePicLoad::resizePic()
+{
+	int imx, imy;
+
+	if (m_conf.aspect_ratio <= 0.0)  // do not keep aspect ration but just fill the destination area
+	{
+		imx = m_filepara->max_x;
+		imy = m_filepara->max_y;
+	}
+	else if ((m_conf.aspect_ratio * m_filepara->oy * m_filepara->max_x / m_filepara->ox) <= m_filepara->max_y)
+	{
+		imx = m_filepara->max_x;
+		imy = (int)(m_conf.aspect_ratio * m_filepara->oy * m_filepara->max_x / m_filepara->ox);
+	}
+	else
+	{
+		imx = (int)((1.0/m_conf.aspect_ratio) * m_filepara->ox * m_filepara->max_y / m_filepara->oy);
+		imy = m_filepara->max_y;
+	}
+
+	if (m_filepara->bits == 8)
+		m_filepara->pic_buffer = simple_resize_8(m_filepara->pic_buffer, m_filepara->ox, m_filepara->oy, imx, imy);
+	else if (m_conf.resizetype && m_filepara->bits < 32)
+		m_filepara->pic_buffer = color_resize(m_filepara->pic_buffer, m_filepara->ox, m_filepara->oy, imx, imy);
+	else if (m_conf.resizetype)
+		m_filepara->pic_buffer = color_resize_32(m_filepara->pic_buffer, m_filepara->ox, m_filepara->oy, imx, imy);
+	else if (m_filepara->bits < 32)
+		m_filepara->pic_buffer = simple_resize_24(m_filepara->pic_buffer, m_filepara->ox, m_filepara->oy, imx, imy);
+	else
+		m_filepara->pic_buffer = simple_resize_32(m_filepara->pic_buffer, m_filepara->ox, m_filepara->oy, imx, imy);
+
+	m_filepara->ox = imx;
+	m_filepara->oy = imy;
 }
 
 void ePicLoad::gotMessage(const Message &msg)
@@ -1019,8 +1268,11 @@ void ePicLoad::gotMessage(const Message &msg)
 			break;
 		case Message::decode_finished: // called from main thread
 			//eDebug("[ePicLoad] decode finished... %s", m_filepara->file);
-			if(m_filepara->callback)
+			if((m_filepara != NULL) && (m_filepara->callback))
+			{
+				eDebug("[ePicLoad] picinfo... %s", m_filepara->picinfo.c_str());
 				PictureData(m_filepara->picinfo.c_str());
+			}
 			else
 			{
 				if(m_filepara != NULL)
@@ -1034,6 +1286,9 @@ void ePicLoad::gotMessage(const Message &msg)
 					m_exif = NULL;
 				}
 			}
+			break;
+		case Message::decode_error:
+			msg_main.send(Message(Message::decode_finished));
 			break;
 		default:
 			eDebug("[ePicLoad] unhandled thread message");
@@ -1188,8 +1443,39 @@ int ePicLoad::getData(ePtr<gPixmap> &result)
 		return 0;
 	}
 
+	// accelAuto (not accelAlways) for 8bpp too, same as every other decode
+	// path (e.g. epng.cpp's loadPNG) - accelAlways bypassed
+	// is_a_candidate_for_accel()'s size gate (gpixmap.cpp) entirely, so
+	// even a tiny 16x16 icon/picon claimed a block from the fixed-size ION
+	// accel pool. Under fast eListbox scrolling with many small icons
+	// decoded in quick succession, that pool exhausts fast (repeated
+	// "[gAccel] alloc failed"/"ION_IOC_ALLOC: Cannot allocate memory"),
+	// which is the condition that preceded a crash inside the vendor accel
+	// blit path. accelAuto still accelerates large 8bpp images exactly as
+	// before (is_a_candidate_for_accel() checks pixel count for both 8 and
+	// 32 bpp, not bpp itself), so this only changes behavior for images too
+	// small to have needed acceleration in the first place.
+	//
+	// On GLES/EGL specifically, that's still not enough: this is the general
+	// decode-to-a-target-size path every ePicLoad caller (getThumbnail(),
+	// and any plugin resizing a downloaded image via LoadPixmap/ePicLoad -
+	// e.g. a cover/poster grid) goes through, and unlike small icons, a
+	// resized poster/cover is routinely well above the 48KB accel
+	// threshold. See epng.cpp's loadJPG() for the full reasoning (identical
+	// here): on EGL, accelerated CPU memory buys a large decoded image
+	// nothing (gTextureManager uploads it to a GL texture either way), while
+	// it does compete with the vendor GPU driver's own internal texture
+	// allocations for the same shrunk-for-EGL accel pool - so a handful of
+	// full-size posters alone can exhaust it, independent of any leak.
+	// accelAuto is kept on the non-GLES renderer, where this pool is the
+	// only ION consumer and has always safely handled large images.
+#ifdef HAVE_EGL
+	int picload_accel = gPixmap::accelNever;
+#else
+	int picload_accel = gPixmap::accelAuto;
+#endif
 	result = new gPixmap(m_filepara->max_x, m_filepara->max_y, m_filepara->bits == 8 ? 8 : 32,
-				NULL, m_filepara->bits == 8 ? gPixmap::accelAlways : gPixmap::accelAuto);
+				NULL, picload_accel);
 	gUnmanagedSurface *surface = result->surface;
 
 	// original image    : ox, oy
@@ -1432,6 +1718,7 @@ int ePicLoad::getData(ePtr<gPixmap> &result)
 					int r = 0;
 					int g = 0;
 					int b = 0;
+					int a = 0;
 					int sq = 0;
 					irow = irowy + ixfac * (int)xind;
 					// average over all pixels in x by y block
@@ -1440,6 +1727,7 @@ int ePicLoad::getData(ePtr<gPixmap> &result)
 							r += irow[0];
 							g += irow[1];
 							b += irow[2];
+							a += irow[3];
 							sq++;
 							irow += ixfac;
 						}
@@ -1455,7 +1743,7 @@ int ePicLoad::getData(ePtr<gPixmap> &result)
 					}
 					else
 					{
-						srow[3] = irow[3]; // alpha
+						srow[3] = a / sq; // alpha
 					}
 					srow += 4;
 					xind += xscale;
@@ -1485,7 +1773,8 @@ RESULT ePicLoad::setPara(PyObject *val)
 		ePyObject fast = PySequence_Fast(val, "");
 		int width = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 0));
 		int height = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 1));
-		double aspectRatio = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 2));
+		ePyObject pas = PySequence_Fast_GET_ITEM(fast, 2);
+		double aspectRatio = PyFloat_Check(pas) ? PyFloat_AsDouble(pas) : PyLong_AsDouble(pas);
 		int as = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 3));
 		bool useCache = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 4));
 		int resizeType = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, 5));

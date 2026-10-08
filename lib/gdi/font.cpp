@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <byteswap.h>
+#include <stdint.h>
 
 #ifndef BYTE_ORDER
 #error "no BYTE_ORDER defined!"
@@ -29,15 +30,11 @@
 #include <fribidi/fribidi.h>
 
 #include <map>
+#define register      // Deprecated in C++11
 
 fontRenderClass *fontRenderClass::instance;
 
-static pthread_mutex_t ftlock= 
-#ifdef __GLIBC__
-	PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP;
-#else
-	PTHREAD_MUTEX_INITIALIZER;
-#endif
+static pthread_mutex_t ftlock=PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP;
 
 struct fntColorCacheKey
 {
@@ -65,7 +62,7 @@ static gLookup &getColor(const gPalette &pal, const gRGB &start, const gRGB &end
 	if (i != colorcache.end())
 		return i->second;
 	gLookup &n=colorcache.insert(std::pair<fntColorCacheKey,gLookup>(key,gLookup())).first->second;
-//	eDebug("[Font] Creating new font color cache entry %02x%02x%02x%02x .. %02x%02x%02x%02x.", start.a, start.r, start.g, start.b,
+//	eDebug("[Font] creating new font color cache entry %02x%02x%02x%02x .. %02x%02x%02x%02x", start.a, start.r, start.g, start.b,
 //		end.a, end.r, end.g, end.b);
 	n.build(16, pal, start, end);
 //	eDebugNoNewLineStart("[Font] ");
@@ -186,7 +183,7 @@ fontRenderClass::fontListEntry::~fontListEntry()
 fontRenderClass::fontRenderClass(): fb(fbClass::getInstance())
 {
 	instance=this;
-	eDebug("[Font] Initializing lib.");
+	eDebug("[Font] Initializing lib...");
 	{
 		if (FT_Init_FreeType(&library))
 		{
@@ -194,11 +191,11 @@ fontRenderClass::fontRenderClass(): fb(fbClass::getInstance())
 			return;
 		}
 	}
-	eDebug("[Font] Loading fonts.");
+	eDebug("[Font] Loading fonts...");
 	font=0;
 
 	int maxbytes=4*1024*1024;
-	eDebug("[Font] Intializing font cache, using max. %dMB.", maxbytes/1024/1024);
+	eDebug("[Font] Intializing font cache, using max. %dMB...", maxbytes/1024/1024);
 	fflush(stdout);
 	{
 		if (FTC_Manager_New(library, 8, 8, maxbytes, myFTC_Face_Requester, this, &cacheManager))
@@ -812,7 +809,7 @@ int eTextPara::renderString(const char *string, int rflags, int border)
 							goto nprint;
 						case 'c':
 						{
-							char color[9];
+							char color[8];
 							int codeidx;
 							for (codeidx = 0; codeidx < 8; codeidx++)
 							{
@@ -825,7 +822,6 @@ int eTextPara::renderString(const char *string, int rflags, int border)
 							}
 							if (codeidx == 8)
 							{
-								color[8] = '\0';
 								newcolor = gRGB(color).argb();
 								activate_newcolor = true;
 								activate_colorreset = false;
@@ -907,7 +903,7 @@ nprint:				isprintable=0;
 					if (fallback_face)
 						index=(rflags&RS_DIRECT)? chr : FT_Get_Char_Index(fallback_face, chr);
 					if (!index)
-						eDebug("[eTextPara] Unicode U+%4lx not present", chr);
+						eDebug("[eTextPara] unicode U+%4lx not present", chr);
 					else
 						appendGlyph(fallback_font, fallback_face, index, flags, rflags, border, i == uc_visual.end() - 1, activate_newcolor, newcolor);
 				}
@@ -1101,6 +1097,14 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 		int sxbase;
 		int sybase;
 		int pitch;
+
+		/* For inverted glyphs a temporary FT_Glyph (grayscale bitmap from
+		 * the image cache) is fetched below; remember it here so it can be
+		 * freed after the CPU rasterizer below consumes it. Always NULL
+		 * for the non-inverted path (which uses the shared sbit cache and
+		 * has no per-call allocation of its own). */
+		FT_Glyph inv_local = NULL;
+
 		if (i->image)
 		{
 			FT_BitmapGlyph glyph = border ? (FT_BitmapGlyph)i->borderimage : (FT_BitmapGlyph)i->image;
@@ -1112,6 +1116,16 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 			sxbase = glyph->bitmap.width;
 			sybase = glyph->bitmap.rows;
 			pitch = glyph->bitmap.pitch;
+			/* FreeType reports pitch as the byte stride of the source bitmap.
+			 * For some cache modes / bitmap variants it can be 0, smaller than
+			 * width, or a bit count rather than a byte count - any of which
+			 * makes the row pointer arithmetic below walk into adjacent
+			 * memory that reads as 0xFF, turning every glyph into a solid
+			 * block of the text colour. Clamp it to at least the glyph width
+			 * so a bad pitch can only under-advance (harmless duplicate rows)
+			 * rather than over-read into unrelated data. */
+			if (pitch < sxbase)
+				pitch = sxbase;
 		}
 		else
 		{
@@ -1124,7 +1138,83 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 			sxbase=glyph_bitmap->width;
 			sybase=glyph_bitmap->height;
 			pitch = glyph_bitmap->pitch;
+			/* See the identical clamp in the i->image branch above for why. */
+			if (pitch < sxbase)
+				pitch = sxbase;
+
+			/* An inverted glyph (GS_INVERT - the marked/selected range of an
+			 * editing field, e.g. the block cursor at the current insertion
+			 * point) is drawn by the CPU rasterizer below with a colour table
+			 * that swaps foreground and background, and it must NOT be offered
+			 * to the GPU atlas path: gEGLDC::renderGlyph() has no way to draw
+			 * an inverted cell, and the FTC small-bitmap cache can return the
+			 * glyph in a packed format whose bytes the rasterizer's (*s)>>4
+			 * high-nibble extraction mis-reads as full coverage (15) for every
+			 * pixel of the cell - which then gets written as a solid block of
+			 * the foreground colour, obscuring the letter underneath it (the
+			 * bug this branch is fixing).
+			 *
+			 * For inverted glyphs, fetch a proper 8bpp grayscale FT_Bitmap
+			 * from the image cache instead - it always lands in
+			 * FT_PIXEL_MODE_GRAY, one byte per pixel, which the rasterizer
+			 * reads correctly. The resulting FT_Glyph is kept in inv_local
+			 * (NOT stored on i->image/i->borderimage, which would change
+			 * eTextPara's ownership and confuse a later blit() that expects
+			 * the original per-instance border glyphs). It is freed right
+			 * after the rasterizer loop below consumes it. */
+			if (i->flags & GS_INVERT)
+			{
+				if (!i->font->getGlyphImage(i->glyph_index, &inv_local, NULL, 0) && inv_local)
+				{
+					if (inv_local->format != FT_GLYPH_FORMAT_BITMAP)
+					{
+						if (FT_Glyph_To_Bitmap(&inv_local, FT_RENDER_MODE_NORMAL, NULL, 1) ||
+							inv_local->format != FT_GLYPH_FORMAT_BITMAP)
+						{
+							FT_Done_Glyph(inv_local);
+							inv_local = NULL;
+						}
+					}
+					if (inv_local)
+					{
+						FT_BitmapGlyph bg = (FT_BitmapGlyph)inv_local;
+						if (bg->bitmap.buffer)
+						{
+							rxbase = i->x + bg->left + offset.x();
+							rybase = (doTopBottomReordering ? line_offs : i->y) - bg->top + offset.y();
+							sbase = bg->bitmap.buffer;
+							sxbase = bg->bitmap.width;
+							sybase = bg->bitmap.rows;
+							pitch = bg->bitmap.pitch;
+							if (pitch < sxbase)
+								pitch = sxbase;
+						}
+						else
+						{
+							FT_Done_Glyph(inv_local);
+							inv_local = NULL;
+						}
+					}
+				}
+			}
+			else
+			{
+				// Offer this glyph to a hardware-accelerated backend (see
+				// gEGLDC::renderGlyph()) before falling through to the CPU
+				// compositing loop below. Only glyphs from the shared FreeType
+				// small-bitmap cache (this branch, keyed by face+size+index) have
+				// a stable identity worth atlasing - the i->image branch above
+				// (border/pre-rendered glyphs) is per-eTextPara-instance and
+				// isn't offered here; see grc.h's gDC::renderGlyph() comment.
+				uint64_t glyph_key = (uint64_t)(uintptr_t)i->font->scaler.face_id;
+				glyph_key = glyph_key * 1000003ull ^ (uint32_t)i->font->scaler.width;
+				glyph_key = glyph_key * 1000003ull ^ (uint32_t)i->font->scaler.height;
+				glyph_key = glyph_key * 1000003ull ^ (uint32_t)i->glyph_index;
+				if (dc.renderGlyph(ePoint(rxbase, rybase), sbase, sxbase, sybase, pitch, currentforeground, glyph_key))
+					continue;
+			}
 		}
+		dc.onGlyphCpuDrawn();
 		dbase = (__u8*)(surface->data)+buffer_stride*rybase+rxbase*surface->bypp;
 		for (unsigned int c = 0; c < clip.rects.size(); ++c)
 		{
@@ -1225,7 +1315,19 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 							{
 								int b=(*s++)>>4;
 								if(b)
-									*td=lookup32[b];
+									/* lookup32[b]'s own alpha byte is only a coverage-interpolated
+									   blend towards this text's *nominal* background alpha -- useful
+									   for smoothing the RGB colour, but not a truthful "what's really
+									   behind this pixel" value. Stamping it verbatim leaves a glyph-
+									   shaped, coverage-dependent alpha footprint in the framebuffer
+									   (near-transparent at AA edges) for what is otherwise a normal,
+									   final, fully-painted pixel. Any later alphablended/rounded-corner
+									   widget that composites on top of this (see the opcode 4 "blend"
+									   case below) reads that leftover footprint back as if it were the
+									   real backdrop, so unrelated text ends up ghosted with the shape
+									   of whatever ordinary text was drawn here before it. Force full
+									   opacity here instead, keeping only the blended RGB. */
+									*td=lookup32[b] | 0xFF000000;
 								++td;
 							}
 							s += extra_source_stride;
@@ -1245,7 +1347,7 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 								int b = (*s++) >> 4;
 								if (b)
 								{
-									// unsigned char frame_a = (*td) >> 24 & 0xFF;
+									unsigned char frame_a = (*td) >> 24 & 0xFF;
 									unsigned char frame_r = (*td) >> 16 & 0xFF;
 									unsigned char frame_g = (*td) >> 8 & 0xFF;
 									unsigned char frame_b = (*td) & 0xFF;
@@ -1256,11 +1358,19 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 									unsigned char db = lookup32[b] & 0xFF;
 
 #define BLEND(y, x, a) (y + (((x-y) * a)>>8))
+									/* blend the output alpha the same way the color channels are blended,
+									   from whatever is already at the destination towards the glyph's own
+									   ink alpha -- otherwise a fully-opaque foreground color (alpha 0, see
+									   gRGB) turns into a fully-transparent stored alpha (0xFF) at every
+									   pixel the glyph touches, making the text vanish against anything that
+									   composites using that alpha channel (e.g. an alpha-blended layer
+									   painted on top of another one). */
+									frame_a = BLEND(frame_a, (unsigned char)(currentforeground.a ^ 0xFF), da) & 0xFF;
 									frame_r = BLEND(frame_r, dr, da) & 0xFF;
 									frame_g = BLEND(frame_g, dg, da) & 0xFF;
 									frame_b = BLEND(frame_b, db, da) & 0xFF;
 #undef BLEND
-									*td = ((currentforeground.a ^ 0xFF) << 24) | (frame_r << 16) | (frame_g << 8) | frame_b;
+									*td = (frame_a << 24) | (frame_r << 16) | (frame_g << 8) | frame_b;
 								}
 								++td;
 							}
@@ -1272,6 +1382,12 @@ void eTextPara::blit(gDC &dc, const ePoint &offset, const gRGB &cbackground, con
 				}
 			}
 		}
+
+		/* Free the temporary grayscale bitmap fetched above for this inverted
+		 * glyph, now that the rasterizer has fully consumed it. Safe to call
+		 * with NULL. */
+		if (inv_local)
+			FT_Done_Glyph(inv_local);
 	}
 }
 

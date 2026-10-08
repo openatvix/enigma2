@@ -44,6 +44,34 @@ void eWidgetDesktop::removeRootWidget(eWidget *root)
 	m_root.remove(root);
 }
 
+/* ADDED: re-sort an already-registered root widget in m_root by its
+   current m_z_position. Unlike addRootWidget(), this is safe to call
+   while the widget is already registered with this desktop (it does not
+   trip the ASSERT(!root->m_desktop) and does not clear composition
+   buffers). */
+void eWidgetDesktop::repositionRootWidget(eWidget *root)
+{
+	if (!root || !root->m_desktop)
+		return;
+
+	m_root.remove(root);
+
+	int invert_sense = 0;
+	if (m_comp_mode == cmBuffered)
+		invert_sense = 1;
+
+	ePtrList<eWidget>::iterator insert_position = m_root.begin();
+	for (;;)
+	{
+		if ((insert_position == m_root.end()) || (invert_sense ^ (insert_position->m_z_position < root->m_z_position)))
+		{
+			m_root.insert(insert_position, root);
+			break;
+		}
+		++insert_position;
+	}
+}
+
 int eWidgetDesktop::movedWidget(eWidget *root)
 {
 	if (m_comp_mode != cmBuffered)

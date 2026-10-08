@@ -35,6 +35,10 @@ public:
 	~eWidgetDesktop();
 	void addRootWidget(eWidget *root);
 	void removeRootWidget(eWidget *root);
+	/* ADDED: re-sort an already-registered root widget in m_root according
+	   to its current m_z_position. Used by eWidget::setZPosition() when
+	   raise()/lower() is applied to a top-level window. */
+	void repositionRootWidget(eWidget *root);
 
 		/* try to move widget content. */
 		/* returns -1 if there's no move support. */

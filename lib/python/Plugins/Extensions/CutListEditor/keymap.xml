@@ -1,3 +1,4 @@
+<!--suppress XmlUnboundNsPrefix -->
 <keymap>
 	<map context="CutlistSeekActions">
 		<device name="dreambox remote control (native)">
@@ -25,7 +26,7 @@
 		<key id="KEY_FASTFORWARD" mapto="seekFwdManual" flags="l" />
 
 		<key id="KEY_LEFT" mapto="seek:-1" flags="m" />
-		<key id="KEY_RIGHT" mapto="seek:1" flags="m" />
+		<key id="KEY_RIGHT" mapto="seek:2" flags="m" />
 
 		<key id="KEY_1" mapto="seek:-10" flags="m" />
 		<key id="KEY_3" mapto="seek:10" flags="m" />
@@ -35,8 +36,6 @@
 		<key id="KEY_9" mapto="seek:90" flags="m" />
 		<key id="KEY_PREVIOUS" mapto="seek:-300" flags="m" />
 		<key id="KEY_NEXT" mapto="seek:300" flags="m" />
-		<key id="KEY_CHANNELDOWN" mapto="seek:-1800" flags="m" />
-		<key id="KEY_CHANNELUP" mapto="seek:1800" flags="m" />
 	</map>
 
 	<map context="CutListEditorActions">

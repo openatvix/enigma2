@@ -1,6 +1,7 @@
 import sys
 import os
 from Tools.Profile import profile, profile_final
+
 profile("PYTHON_START")
 
 # Don't remove this line. It may seem to do nothing, but if removed,
@@ -9,11 +10,26 @@ import Tools.RedirectOutput
 import enigma
 import eConsoleImpl
 import eBaseImpl
+
 enigma.eTimer = eBaseImpl.eTimer
 enigma.eSocketNotifier = eBaseImpl.eSocketNotifier
 enigma.eConsoleAppContainer = eConsoleImpl.eConsoleAppContainer
-
+from Components.config import config, configfile, ConfigText, ConfigYesNo, ConfigInteger, ConfigSelection, NoSave
 from traceback import print_exc
+
+# Plugin Browser Style
+config.misc.plugin_style = ConfigSelection(default='list', choices=[
+	('list', _('View as list')),
+	('grid1', _('Grid 1 - Dark')),
+	('grid2', _('Grid 2 - Teal')),
+	('grid3', _('Grid 3 - Transparent')),
+	('grid4', _('Grid 4 - Ocean Blue')),
+	('grid5', _('Grid 5 - Sunset')),
+	('grid6', _('Grid 6 - Emerald')),
+	('grid7', _('Grid 7 - Frosted Glass')),
+	('grid8', _('Grid 8 - Amber Glow')),
+	('grid9', _('Grid 9 - Violet Dream'))
+])
 
 profile("SetupDevices")
 import Components.SetupDevices
@@ -26,18 +42,15 @@ Tools.Geolocation.InitGeolocation()
 profile("SimpleSummary")
 from Screens import InfoBar
 from Screens.SimpleSummary import SimpleSummary
-
 from sys import stdout
 
 profile("Bouquets")
-from Components.config import config, configfile, ConfigText, ConfigYesNo, ConfigInteger, ConfigSelection, NoSave
 config.misc.load_unlinked_userbouquets = ConfigSelection(default="1", choices=[("0", _("Off")), ("1", _("Top")), ("2", _("Bottom"))])
 if config.misc.load_unlinked_userbouquets.value.lower() in ("true", "false"):
 	config.misc.load_unlinked_userbouquets.value = "1" if config.misc.load_unlinked_userbouquets.value.lower() == "true" else "0"
 
 def setLoadUnlinkedUserbouquets(configElement):
 	enigma.eDVBDB.getInstance().setLoadUnlinkedUserbouquets(int(configElement.value))
-
 
 config.misc.load_unlinked_userbouquets.addNotifier(setLoadUnlinkedUserbouquets)
 enigma.eDVBDB.getInstance().reloadBouquets()
@@ -59,42 +72,24 @@ InitFallbackFiles()
 profile("config.misc")
 config.misc.radiopic = ConfigText(default=resolveFilename(SCOPE_CURRENT_SKIN, "radio.mvi"))
 config.misc.blackradiopic = ConfigText(default=resolveFilename(SCOPE_CURRENT_SKIN, "black.mvi"))
-config.misc.startCounter = ConfigInteger(default=0) # number of e2 starts...
-config.misc.standbyCounter = NoSave(ConfigInteger(default=0)) # number of standby
-config.misc.DeepStandby = NoSave(ConfigYesNo(default=False)) # detect deepstandby
-config.misc.RestartUI = ConfigYesNo(default=False) # detect user interface restart
+config.misc.startCounter = ConfigInteger(default=0)
+config.misc.standbyCounter = NoSave(ConfigInteger(default=0))
+config.misc.DeepStandby = NoSave(ConfigYesNo(default=False))
+config.misc.RestartUI = ConfigYesNo(default=False)
 config.misc.prev_wakeup_time = ConfigInteger(default=0)
-#config.misc.prev_wakeup_time_type is only valid when wakeup_time is not 0
 config.misc.prev_wakeup_time_type = ConfigInteger(default=0)
-# 0 = RecordTimer, 1 = ZapTimer, 2 = Plugins, 3 = WakeupTimer
 config.misc.epgcache_filename = ConfigText(default="/media/hdd/epg.dat", fixed_size=False)
-
 
 def setEPGCachePath(configElement):
 	if os.path.isdir(configElement.value) or os.path.islink(configElement.value):
 		configElement.value = os.path.join(configElement.value, "epg.dat")
 	enigma.eEPGCache.getInstance().setCacheFile(configElement.value)
 
-#demo code for use of standby enter leave callbacks
-#def leaveStandby():
-#	print "!!!!!!!!!!!!!!!!!leave standby"
-
-#def standbyCountChanged(configElement):
-#	print "!!!!!!!!!!!!!!!!!enter standby num", configElement.value
-#	from Screens.Standby import inStandby
-#	inStandby.onClose.append(leaveStandby)
-
-#config.misc.standbyCounter.addNotifier(standbyCountChanged, initial_call = False)
-####################################################
-
-
 profile("Twisted")
 try:
 	import twisted.python.runtime
-
 	import e2reactor
 	e2reactor.install()
-
 	from twisted.internet import reactor
 
 	def runReactor():
@@ -106,8 +101,6 @@ except ImportError:
 		enigma.runMainloop()
 
 profile("LOAD:Plugin")
-
-# initialize autorun plugins and plugin menu entries
 from Components.PluginComponent import plugins
 
 profile("LOAD:Wizard")
@@ -119,7 +112,6 @@ from Plugins.Plugin import PluginDescriptor
 
 profile("misc")
 had = dict()
-
 
 def dump(dir, p=""):
 	if isinstance(dir, dict):
@@ -135,11 +127,6 @@ def dump(dir, p=""):
 	else:
 		print(p + ":" + str(dir))
 
-# + ":" + str(dir.__class__)
-
-# display
-
-
 profile("LOAD:ScreenGlobals")
 from Screens.Globals import Globals
 from Screens.SessionGlobals import SessionGlobals
@@ -148,32 +135,6 @@ from Screens.Screen import Screen
 profile("Screen")
 Screen.globalScreen = Globals()
 
-# Session.open:
-# * push current active dialog ('current_dialog') onto stack
-# * call execEnd for this dialog
-#   * clear in_exec flag
-#   * hide screen
-# * instantiate new dialog into 'current_dialog'
-#   * create screens, components
-#   * read, apply skin
-#   * create GUI for screen
-# * call execBegin for new dialog
-#   * set in_exec
-#   * show gui screen
-#   * call components' / screen's onExecBegin
-# ... screen is active, until it calls 'close'...
-# Session.close:
-# * assert in_exec
-# * save return value
-# * start deferred close handler ('onClose')
-# * execEnd
-#   * clear in_exec
-#   * hide screen
-# .. a moment later:
-# Session.doClose:
-# * destroy screen
-
-
 class Session:
 	def __init__(self, desktop=None, summary_desktop=None, navigation=None):
 		self.desktop = desktop
@@ -181,17 +142,12 @@ class Session:
 		self.nav = navigation
 		self.delay_timer = enigma.eTimer()
 		self.delay_timer.callback.append(self.processDelay)
-
 		self.current_dialog = None
-
 		self.dialog_stack = []
 		self.summary_stack = []
 		self.summary = None
-
 		self.in_exec = False
-
 		self.screen = SessionGlobals(self)
-
 		for p in plugins.getPlugins(PluginDescriptor.WHERE_SESSIONSTART):
 			try:
 				p(reason=0, session=self)
@@ -202,16 +158,12 @@ class Session:
 
 	def processDelay(self):
 		callback = self.current_dialog.callback
-
 		retval = self.current_dialog.returnValue
-
 		if self.current_dialog.isTmp:
 			self.current_dialog.doClose()
-#			dump(self.current_dialog)
 			del self.current_dialog
 		else:
 			del self.current_dialog.callback
-
 		self.popCurrent()
 		if callback is not None:
 			callback(*retval)
@@ -220,27 +172,19 @@ class Session:
 		assert not self.in_exec
 		self.in_exec = True
 		c = self.current_dialog
-
-		# when this is an execbegin after a execend of a "higher" dialog,
-		# popSummary already did the right thing.
 		if first:
 			self.instantiateSummaryDialog(c)
-
 		c.saveKeyboardMode()
 		c.execBegin()
-
-		# when execBegin opened a new dialog, don't bother showing the old one.
 		if c == self.current_dialog and do_show:
 			c.show()
 
 	def execEnd(self, last=True):
 		assert self.in_exec
 		self.in_exec = False
-
 		self.current_dialog.execEnd()
 		self.current_dialog.restoreKeyboardMode()
 		self.current_dialog.hide()
-
 		if last and self.summary:
 			self.current_dialog.removeSummary(self.summary)
 			self.popSummary()
@@ -262,13 +206,10 @@ class Session:
 			screen.addSummary(self.summary)
 
 	def doInstantiateDialog(self, screen, arguments, kwargs, desktop):
-		# create dialog
 		dlg = screen(self, *arguments, **kwargs)
 		if dlg is None:
 			return
-		# read skin data
 		readSkin(dlg, None, dlg.skinName, desktop)
-		# create GUI view of this dialog
 		dlg.setDesktop(desktop)
 		dlg.applySkin()
 		return dlg
@@ -289,7 +230,7 @@ class Session:
 		self.pushCurrent()
 		self.current_dialog = dialog
 		self.current_dialog.isTmp = False
-		self.current_dialog.callback = None # would cause re-entrancy problems.
+		self.current_dialog.callback = None
 		self.execBegin()
 
 	def openWithCallback(self, callback, screen, *arguments, **kwargs):
@@ -300,8 +241,6 @@ class Session:
 	def open(self, screen, *arguments, **kwargs):
 		if self.dialog_stack and not self.in_exec:
 			raise RuntimeError("modal open are allowed only from a screen which is modal!")
-			# ...unless it's the very first screen.
-
 		self.pushCurrent()
 		dlg = self.current_dialog = self.instantiateDialog(screen, *arguments, **kwargs)
 		dlg.isTmp = True
@@ -313,16 +252,7 @@ class Session:
 		if not self.in_exec:
 			print("[StartEnigma] Close after exec!")
 			return
-
-		# be sure that the close is for the right dialog!
-		# if it's not, you probably closed after another dialog
-		# was opened. this can happen if you open a dialog
-		# onExecBegin, and forget to do this only once.
-		# after close of the top dialog, the underlying will
-		# gain focus again (for a short time), thus triggering
-		# the onExec, which opens the dialog again, closing the loop.
 		assert screen == self.current_dialog
-
 		self.current_dialog.returnValue = retval
 		self.delay_timer.start(0, 1)
 		self.execEnd()
@@ -340,22 +270,18 @@ class Session:
 		if self.summary:
 			self.summary.show()
 
-
 profile("Standby,PowerKey")
 import Screens.Standby
 from Screens.Menu import MainMenu, mdom
 from GlobalActions import globalActionMap
 
-
 class PowerKey:
-	""" PowerKey stuff - handles the powerkey press and powerkey release actions"""
-
 	def __init__(self, session):
 		self.session = session
 		globalActionMap.actions["power_down"] = lambda *args: None
 		globalActionMap.actions["power_up"] = self.powerup
 		globalActionMap.actions["power_long"] = self.powerlong
-		globalActionMap.actions["deepstandby"] = self.shutdown # frontpanel long power button press
+		globalActionMap.actions["deepstandby"] = self.shutdown
 		globalActionMap.actions["discrete_off"] = self.standby
 
 	def shutdown(self):
@@ -402,10 +328,8 @@ class PowerKey:
 		else:
 			return 0
 
-
 profile("Scart")
 from Screens.Scart import Scart
-
 
 class AutoScartControl:
 	def __init__(self, session):
@@ -422,7 +346,6 @@ class AutoScartControl:
 		self.VCRSbChanged(self.current_vcr_sb)
 
 	def VCRSbChanged(self, value):
-		#print "vcr sb changed to", value
 		self.current_vcr_sb = value
 		if config.av.vcrswitch.value or value > 2:
 			if value:
@@ -430,80 +353,60 @@ class AutoScartControl:
 			else:
 				self.scartDialog.switchToTV()
 
-
 profile("Load:CI")
 from Screens.Ci import CiHandler
 
 profile("Load:VolumeControl")
 from Components.VolumeControl import VolumeControl
 
-
 def runScreenTest():
 	config.misc.startCounter.value += 1
 	config.misc.startCounter.save()
-
 	profile("readPluginList")
 	enigma.pauseInit()
 	plugins.readPluginList(resolveFilename(SCOPE_PLUGINS))
 	enigma.resumeInit()
-
 	profile("Init:Session")
 	nav = Navigation()
 	session = Session(desktop=enigma.getDesktop(0), summary_desktop=enigma.getDesktop(1), navigation=nav)
-
 	CiHandler.setSession(session)
 	powerOffTimer.setSession(session)
-
 	screensToRun = [p.fnc for p in plugins.getPlugins(PluginDescriptor.WHERE_WIZARD)]
-
 	profile("wizards")
 	screensToRun += wizardManager.getWizards()
-
 	screensToRun.append((100, InfoBar.InfoBar))
-
 	screensToRun.sort(key=lambda x: x[0])
-
 	enigma.ePythonConfigQuery.setQueryFunc(configfile.getResolvedKey)
 
 	def runNextScreen(session, screensToRun, *result):
 		if result:
 			enigma.quitMainloop(*result)
 			return
-
 		screen = screensToRun[0][1]
 		args = screensToRun[0][2:]
-
 		if screensToRun:
 			session.openWithCallback(boundFunction(runNextScreen, session, screensToRun[1:]), screen, *args)
 		else:
 			session.open(screen, *args)
 
 	config.misc.epgcache_filename.addNotifier(setEPGCachePath)
-
 	runNextScreen(session, screensToRun)
-
 	profile("Init:VolumeControl")
 	vol = VolumeControl(session)
 	profile("Init:PowerKey")
 	power = PowerKey(session)
-
-	# we need session.scart to access it from within menu.xml
 	session.scart = AutoScartControl(session)
-
 	profile("Init:Trashcan")
 	import Tools.Trashcan
 	Tools.Trashcan.init(session)
-
 	profile("RunReactor")
 	profile_final()
 	runReactor()
-
 	profile("wakeup")
 	from time import time, strftime, localtime
 	from Tools.StbHardware import setFPWakeuptime, setRTCtime
 	from Screens.SleepTimerEdit import isNextWakeupTime
-	#get currentTime
-	nowTime = time()
+	nowTime = int(time())
 	wakeupList = [
 		x for x in ((session.nav.RecordTimer.getNextRecordingTime(), 0),
 					(session.nav.RecordTimer.getNextZapTime(isWakeup=True), 1),
@@ -515,8 +418,8 @@ def runScreenTest():
 	if wakeupList:
 		from time import strftime
 		startTime = wakeupList[0]
-		if (startTime[0] - nowTime) < 270: # no time to switch box back on
-			wptime = nowTime + 30  # so switch back on in 30 seconds
+		if (startTime[0] - nowTime) < 270:
+			wptime = nowTime + 30
 		else:
 			wptime = startTime[0] - 240
 		print("[StartEnigma] so set RTC now to current linux time!", strftime("%Y/%m/%d %H:%M", localtime(nowTime)))
@@ -529,17 +432,13 @@ def runScreenTest():
 	else:
 		config.misc.prev_wakeup_time.value = 0
 	config.misc.prev_wakeup_time.save()
-
 	profile("stopService")
 	session.nav.stopService()
 	profile("nav shutdown")
 	session.nav.shutdown()
-
 	profile("configfile.save")
 	configfile.save()
-
 	return 0
-
 
 profile("Init:skin")
 import skin
@@ -593,17 +492,9 @@ import Components.RcModel
 profile("Init:PowerOffTimer")
 from Components.PowerOffTimer import powerOffTimer
 
-#from enigma import dump_malloc_stats
-#t = eTimer()
-#t.callback.append(dump_malloc_stats)
-#t.start(1000)
-
-# first, setup a screen
 try:
 	runScreenTest()
-
 	plugins.shutdown()
-
 	Components.ParentalControl.parentalControl.save()
 except:
 	print('[StartEnigma] EXCEPTION IN PYTHON STARTUP CODE:')

@@ -12,9 +12,11 @@
 		<item level="1" text="Show setup default values" description="In Setup screens choose whether to show the default value of the selected item in the description field.">config.usage.setupShowDefault</item>
 		<item level="1" text="Show screen path" description="This option allows you to show the full screen path leading to the current screen.">config.usage.showScreenPath</item>
 		<item level="0" text="Sort order for help screen" description="Choose the order in which items are displayed in Help windows">config.usage.help_sortorder</item>
+		<item level="0" text="Plugin Browser Style" description="This option allows you to select the plugin browser style.">config.misc.plugin_style</item>
 		<item level="0" text="Show menu or plugin numbers" description="This option allows you to show menu and/or plugin number quick links.">config.usage.menu_show_numbers</item>
 		<item level="2" text="Show softcam setup in extensions menu" description="This option allows you to add the softcam setup in the extensions menu." requires="HasSoftcamInstalled">config.misc.softcam_setup.extension_menu</item>
 		<item level="1" text="Zap mode" requires="ZapMode" description="Configure the way in which the receiver changes channels.">config.misc.zapmode</item>
+		<item level="1" text="Zap mode" requires="ISDREAMBOX" description="Configure the way in which the receiver changes channels.">config.misc.zapmodeDM</item>
 		<item level="2" text="Enable teletext caching" description="When enabled, teletext pages will be cached, allowing faster access.">config.usage.enable_tt_caching</item>
 		<item level="1" text="12V output" description="12V output" requires="12V_Output.">config.usage.output_12V</item>
 		<item level="1" text="Alternative services tuner priority" description="Configure which tuner type will be preferred when the same service is available on different types of tuners. Choose 'no priority' to try each alternative one by one regardless of the tuner type.">config.usage.alternatives_priority</item>
@@ -34,6 +36,10 @@
 		<item level="2" text="Include ECM in http streams" description="When enabled, ECM data will be included in http streams. This allows a client receiver to do the descrambling.">config.streaming.stream_ecm</item>
 		<item level="2" text="Descramble sending http streams" description="When enabled, http streams are descrambled on the server side. The (remote) client receiver does not have to do descrambling. Default on.">config.streaming.descramble</item>
 		<item level="2" text="Descramble receiving http streams" requires="HasOfflineDecoding" description="When enabled, always descramble receiving http streams. This takes up more resources (descrambling demuxers), only enable if necessary. Individual streams are always descrambled if 0x100 is added to the service type, regardless of this setting. Default off.">config.streaming.descramble_client</item>
+		<item level="2" text="Descramble service via streamrelay url" description="The IP address from the streamrelay server that is used to descramble services that can only be encrypted via streamrelay">config.misc.softcam_streamrelay_url</item>
+		<item level="2" text="Descramble service via streamrelay port" description="The port from the streamrelay server that is used to descramble services that can only be encrypted via streamrelay">config.misc.softcam_streamrelay_port</item>
+		<item level="2" text="Stream Relay delay" description="Delay when closing a stream relay service before reallocating the tuner for another service. Using '0' is only recommended for boxes with multiple satellite tuners.">config.misc.softcam_streamrelay_delay</item>
+		<item level="0" text="Use streamrelay whitelist file" description="Choose whether to use the streamrelay_whitelist file. The whitelist file should be disabled if you are using softcsa.">config.softcsa.useStreamRelayWhitelist</item>
 		<item level="2" text="Require authentication for http streams" description="When enabled, authentication is required to watch http streams.">config.streaming.authentication</item>
 		<item level="2" text="Http(s) stream start delay" description="Define additional delay in milliseconds before start of http(s) streams, e.g. to connect a remote tuner, you use a complex system of DiSEqC.">config.usage.http_startdelay</item>
 		<item level="2" text="Fan operation" description="Configure how the fan should operate" requires="Fan">config.usage.fan</item>
@@ -97,6 +103,7 @@
 		<item level="2" text="Hide zap errors" description="When enabled, error messages related to zapping will not be shown.">config.usage.hide_zap_errors</item>
 		<item level="2" text="Show crypto info in infobar" conditional="parameters.get('hasInfobarCryptoInfo', True)" description="When enabled, encryption info will be shown in the infobar (when supported by the skin).">config.usage.show_cryptoinfo</item>
 		<item level="2" text="Show picons in display" description="Configure if service picons will be shown in display (when supported by the skin)." requires="HasFrontDisplayPicon">config.usage.show_picon_in_display</item>
+		<item level="1" text="Show picons in channel selection list" description="Configure if service picons will be shown in the channel selection list.">config.usage.service_icon_enable</item>
 		<item level="2" text="Infobar frontend data source" description="Configure the source of the frontend data as shown on the infobars. 'Settings' is as stored on the settings. 'Tuner' is as reported by the tuner.">config.usage.infobar_frontend_source</item>
 		<item level="2" text="Toggle the SNR values displayed" description="When set to 'Yes', all locations where SNR is displayed in dB's will show an SNR percentage, and vice versa.">config.usage.swap_snr_on_osd</item>
 		<item level="2" text="Behavior of '0' button in PiP mode" description="Configure the function of the '0' button when Picture in Picture is active." requires="PIPAvailable">config.usage.pip_zero_button</item>
@@ -219,6 +226,19 @@
 		<item text="Nameserver" description="Configure the nameserver (DNS).">config.network.dns</item>
 		<item text="Activate network settings" description="Activate the configured network settings.">config.network.activate</item>
 	</setup>
+	<setup key="OSCamInfoSetup" title="OSCam/NCam Information Settings">
+		<item level="0" text="Read Userdata from oscam/ncam.conf" description="Read Userdata from oscam/ncam.conf">config.oscaminfo.userDataFromConf</item>
+		<if conditional="not config.oscaminfo.userDataFromConf.value">
+			<item level="0" text="Username (httpuser)" description="Username (httpuser)">config.oscaminfo.username</item>
+			<item level="0" text="Password (httpwd)" description="Password (httpuser)">config.oscaminfo.password</item>
+			<item level="0" text="Hostname or IP address" description="DNS name or IP address">config.oscaminfo.ip</item>
+			<item level="0" text="Port" description="Port">config.oscaminfo.port</item>
+			<item level="0" text="Use HTTPS protocol" description="Use HTTPS protocol">config.oscaminfo.usessl</item>
+		</if>
+		<item level="0" text="Verify WebIf SSL certificate" description="Verify WebIf SSL certificate">config.oscaminfo.verifycert</item>
+		<item level="0" text="Automatically update Client/Server View" description="Automatically update Client/Server View">config.oscaminfo.autoUpdate</item>
+		<item level="0" text="Automatically update Log-Fullscreen View" description="Automatically update Log-Fullscreen View">config.oscaminfo.autoUpdateLog</item>
+	</setup>
 	<setup key="RFmod" title="RF output">
 		<item level="1" text="Modulator">config.rfmod.enable</item>
 		<item level="2" text="Test mode">config.rfmod.test</item>
@@ -242,6 +262,10 @@
 		<item level="0" text="Brightness" description="Configure the brightness level of the front panel display.">config.lcd.bright</item>
 		<item level="0" text="Contrast" description="Configure the contrast level of the front panel display.">config.lcd.contrast</item>
 		<item level="0" text="Standby" description="Configure the brightness level of the front panel display during standby.">config.lcd.standby</item>
+		<item level="0" text="LED color during normal operations" description="Configure front LED color during normal operations (this requires an enigma2 restart).">config.usage.frontled_color</item>
+		<item level="0" text="LED color during recording" description="Configure front LED color during recording (this requires an enigma2 restart).">config.usage.frontledrec_color</item>
+		<item level="0" text="LED color during standby" description="Configure front LED color during standby (this requires an enigma2 restart).">config.usage.frontledstdby_color</item>
+		<item level="0" text="LED color during recording in standby" description="Configure front LED color during recording in standby (this requires an enigma2 restart).">config.usage.frontledrecstdby_color</item>
 		<item level="0" text="Power LED" description="Turn on the power LED." requires="PowerLED">config.usage.powerLED</item>
 		<item level="0" text="Standby LED" description="Turn on the power LED during standby." requires="StandbyLED">config.usage.standbyLED</item>
 		<item level="0" text="Deep Standby LED" description="Turn on the power LED during deep standby." requires="SuspendLED">config.usage.suspendLED</item>

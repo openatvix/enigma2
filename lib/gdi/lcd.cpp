@@ -1,7 +1,5 @@
 #include <lib/gdi/lcd.h>
 #include <lib/gdi/epng.h>
-#include <byteswap.h>
-#include <endian.h>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -10,7 +8,7 @@
 #include <lib/gdi/esize.h>
 #include <lib/base/init.h>
 #include <lib/base/init_num.h>
-#ifdef HAVE_TEXTLCD
+#if defined(HAVE_TEXTLCD) || defined(HAVE_7SEGMENT)
 	#include <lib/base/estring.h>
 #endif
 #include <lib/gdi/glcddc.h>
@@ -32,10 +30,13 @@ eLCD *eLCD::getInstance()
 
 void eLCD::setSize(int xres, int yres, int bpp)
 {
+	_stride = xres * bpp / 8;
+	_buffer = new unsigned char[xres * yres * bpp / 8];
+#ifdef LCD_DM900_Y_OFFSET
+	xres -= LCD_DM900_Y_OFFSET;
+#endif
 	res = eSize(xres, yres);
-	_buffer = new unsigned char[xres * yres * bpp/8];
-	memset(_buffer, 0, res.height() * res.width() * bpp / 8);
-	_stride = res.width() * bpp / 8;
+	memset(_buffer, 0, xres * yres * bpp / 8);
 	eDebug("[eLCD] (%dx%dx%d) buffer %p %d bytes, stride %d", xres, yres, bpp, _buffer, xres * yres * bpp / 8, _stride);
 }
 
@@ -60,7 +61,7 @@ void eLCD::unlock()
 	locked = 0;
 }
 
-#ifdef HAVE_TEXTLCD
+#if defined(HAVE_TEXTLCD) || defined(HAVE_7SEGMENT)
 void eLCD::renderText(ePoint start, const char *text)
 {
 	if (lcdfd >= 0 && start.y() < 5)
@@ -79,6 +80,7 @@ eDBoxLCD::eDBoxLCD()
 {
 	int xres = 132, yres = 64, bpp = 8;
 	flipped = false;
+	dump = false;
 	inverted = 0;
 	lcd_type = 0;
 #ifndef NO_LCD
@@ -136,6 +138,14 @@ eDBoxLCD::eDBoxLCD()
 		setSize(xres, yres, bpp);
 	}
 #endif
+	if (FILE * file = fopen("/proc/stb/lcd/right_half", "w"))
+	{
+		fprintf(file,"skin");
+		fclose(file);
+	}
+	instance = this;
+
+	setSize(xres, yres, bpp);
 }
 
 void eDBoxLCD::setInverted(unsigned char inv)
@@ -148,6 +158,12 @@ void eDBoxLCD::setFlipped(bool onoff)
 {
 	flipped = onoff;
 	update();
+}
+
+void eDBoxLCD::setDump(bool onoff)
+{
+	dump = onoff;
+	dumpLCD2PNG();
 }
 
 int eDBoxLCD::setLCDContrast(int contrast)
@@ -211,18 +227,128 @@ int eDBoxLCD::setLCDBrightness(int brightness)
 	return(0);
 }
 
+int eDBoxLCD::setLED(int value, int option)
+{
+	switch(option)
+	{
+		case LED_BRIGHTNESS:
+			eDebug("setLEDNormalState %d", value);
+			if(ioctl(lcdfd, LED_IOCTL_BRIGHTNESS_NORMAL, (unsigned char)value) < 0)
+				eDebug("[LED] can't set led brightness");
+			break;
+		case LED_DEEPSTANDBY:
+			eDebug("setLEDBlinkingTime %d", value);
+			if(ioctl(lcdfd, LED_IOCTL_BRIGHTNESS_DEEPSTANDBY, (unsigned char)value) < 0)
+				eDebug("[LED] can't set led deep standby");
+			break;
+		case LED_BLINKINGTIME:
+			eDebug("setLEDBlinkingTime %d", value);
+			if(ioctl(lcdfd, LED_IOCTL_BLINKING_TIME, (unsigned char)value) < 0)
+				eDebug("[LED] can't set led blinking time");
+			break;
+	}
+	return 0;
+}
+
 eDBoxLCD::~eDBoxLCD()
 {
-	if (lcdfd >= 0)
+	if (lcdfd>=0)
 	{
 		close(lcdfd);
-		lcdfd = -1;
+		lcdfd=-1;
+	}
+}
+
+void eDBoxLCD::dumpLCD2PNG(void)
+{
+	eDebug("[eDBoxLCD] dumpLCD2PNG");
+	if (dump)
+	{
+		dump = false;
+		int bpp =( _stride *8)/res.width();
+		int lcd_width = res.width();
+		int lcd_hight = res.height();
+		ePtr<gPixmap> pixmap32;
+		pixmap32 = new gPixmap(eSize(lcd_width, lcd_hight), 32, gPixmap::accelNever);
+		const uint8_t *srcptr = (uint8_t*)_buffer;
+		uint8_t *dstptr=(uint8_t*)pixmap32->surface->data;
+
+		eDebug("%d bit processing",bpp);
+
+		switch(bpp)
+		{
+			case 8:
+				{
+					for (int y = lcd_hight; y != 0; --y)
+					{
+						gRGB pixel32;
+						uint8_t pixval;
+						int x = lcd_width;
+						gRGB *dst = (gRGB *)dstptr;
+						const uint8_t *src = (const uint8_t *)srcptr;
+						while (x--)
+						{
+							pixval = *src++;;
+							pixel32.a = 0xFF;
+							pixel32.r = pixval;
+							pixel32.g = pixval;
+							pixel32.b = pixval;
+							*dst++ = pixel32;
+						}
+						srcptr += _stride;
+						dstptr += pixmap32->surface->stride;
+					}
+					savePNG("/tmp/lcd.png", pixmap32);
+				}
+				[[fallthrough]];
+			case 16:
+				{
+					for (int y = lcd_hight; y != 0; --y)
+					{
+						gRGB pixel32;
+						uint16_t pixel16;
+						int x = lcd_width;
+						gRGB *dst = (gRGB *)dstptr;
+						const uint16_t *src = (const uint16_t *)srcptr;
+						while (x--)
+						{
+#if BYTE_ORDER == LITTLE_ENDIAN
+							pixel16 = bswap_16(*src++);
+#else
+							pixel16 = *src++;;
+#endif
+							pixel32.a = 0xFF;
+							pixel32.r = (pixel16 << 3) & 0xF8;
+							pixel32.g = (pixel16 >> 3) & 0xFC;
+							pixel32.b = (pixel16 >> 8) & 0xF8;
+							*dst++ = pixel32;
+						}
+						srcptr += _stride;
+						dstptr += pixmap32->surface->stride;
+					}
+					savePNG("/tmp/lcd.png", pixmap32);
+				}
+				break;
+			case 32:
+				{
+					for (int y = lcd_hight; y != 0; --y)
+					{
+						memcpy(dstptr, srcptr, lcd_width*pixmap32->surface->bypp);
+						srcptr += _stride;
+						dstptr += pixmap32->surface->stride;
+					}
+					savePNG("/tmp/lcd.png", pixmap32);
+				}
+				break;
+			default:
+				eDebug("%d bit not supportet yet",bpp);
+		}
 	}
 }
 
 void eDBoxLCD::update()
 {
-#ifndef HAVE_TEXTLCD
+#if !defined(HAVE_TEXTLCD) && !defined(HAVE_7SEGMENT)
 	if (lcdfd < 0)
 		return;
 
@@ -244,12 +370,13 @@ void eDBoxLCD::update()
 					raw[(7 - y) * 132 + (131 - x)] = BIT_SWAP(pix ^ inverted);
 				}
 				else
+				{
 					raw[y * 132 + x] = pix ^ inverted;
+				}
 			}
 		}
-		if (write(lcdfd, raw, 132 * 8) == -1) {
-			eDebug("[eDboxLCD] write() (1) failed");
-		}
+		if (write(lcdfd, raw, 132*8) < 0)
+			eDebug("[eDBoxLCD] write to lcd failed: %m");
 	}
 	else if (lcd_type == 3)
 	{
@@ -264,32 +391,50 @@ void eDBoxLCD::update()
 				for (unsigned int x = 0; x < width; x++)
 				{
 					if (flipped)
+					{
 						/* 8bpp, no bit swapping */
 						raw[(height - 1 - y) * width + (width - 1 - x)] = _buffer[y * width + x] ^ inverted;
+					}
 					else
+					{
 						raw[y * width + x] = _buffer[y * width + x] ^ inverted;
+					}
 				}
 			}
-			if (write(lcdfd, raw, _stride * height) == -1) {
-				eDebug("[eDboxLCD] write() (2) failed");
-			}
+			if (write(lcdfd, raw, _stride * height) < 0)
+				eDebug("[eDBoxLCD] write to lcd failed: %m");
 		}
 		else
-			if (write(lcdfd, _buffer, _stride * res.height()) == -1) {
-				eDebug("[eDboxLCD] write() (3) failed");
+		{
+#if defined(LCD_DM900_Y_OFFSET)
+			unsigned char gb_buffer[_stride * res.height()];
+			for (int offset = 0; offset < ((_stride * res.height()) >> 2); offset++)
+			{
+				unsigned int src = 0;
+				if (offset % (_stride >> 2) >= LCD_DM900_Y_OFFSET)
+					src = ((unsigned int *)_buffer)[offset - LCD_DM900_Y_OFFSET];
+				//                                             blue                         red                  green low                     green high
+				((unsigned int *)gb_buffer)[offset] = ((src >> 3) & 0x001F001F) | ((src << 3) & 0xF800F800) | ((src >> 8) & 0x00E000E0) | ((src << 8) & 0x07000700);
 			}
+			if (write(lcdfd, gb_buffer, _stride * res.height()) < 0)
+				eDebug("[eDBoxLCD] write to lcd failed: %m");
+#else
+			if (write(lcdfd, _buffer, _stride * res.height()) < 0)
+				eDebug("[eDBoxLCD] write to lcd failed: %m");
+#endif
+		}
 	}
 	else /* lcd_type == 1 */
 	{
-		unsigned char raw[64 * 64];
+		unsigned char raw[64*64];
 		int x, y;
-		memset(raw, 0, 64 * 64);
-		for (y = 0; y < 64; y++)
+		memset(raw, 0, 64*64);
+		for (y=0; y<64; y++)
 		{
-			int pix = 0;
-			for (x = 0; x < 128 / 2; x++)
+			int pix=0;
+			for (x=0; x<128 / 2; x++)
 			{
-				pix = (_buffer[y * 132 + x * 2 + 2] & 0xF0) | (_buffer[y * 132 + x * 2 + 1 + 2] >> 4);
+				pix = (_buffer[y*132 + x * 2 + 2] & 0xF0) |(_buffer[y*132 + x * 2 + 1 + 2] >> 4);
 				if (inverted)
 					pix = 0xFF - pix;
 				if (flipped)
@@ -301,107 +446,18 @@ void eDBoxLCD::update()
 					raw[(63 - y) * 64 + (63 - x)] = byte;
 				}
 				else
+				{
 					raw[y * 64 + x] = pix;
+				}
 			}
 		}
-		if (write(lcdfd, raw, 64 * 64) == -1) {
-			eDebug("[eDboxLCD] write() (4) failed");
-		}
+		if (write(lcdfd, raw, 64*64) < 0)
+			eDebug("[eDBoxLCD] write to lcd failed: %m");
 	}
 #endif
-}
-
-void eLCD::setDump(bool onoff)
-{
-	if (onoff)
-		dumpLCD(true);
 }
 
 void eDBoxLCD::dumpLCD(bool png)
 {
-	int bpp = (_stride * 8) / res.width();
-	int lcd_width = res.width();
-	int lcd_height = res.height();
-
-	ePtr<gPixmap> pixmap32;
-	pixmap32 = new gPixmap(eSize(lcd_width, lcd_height), 32, gPixmap::accelNever);
-
-	const uint8_t *srcptr = (uint8_t *)_buffer;
-	uint8_t *dstptr = (uint8_t *)pixmap32->surface->data;
-
-	switch (bpp)
-	{
-	case 8:
-	{
-		for (int y = lcd_height; y != 0; --y)
-		{
-			gRGB pixel32;
-			uint8_t pixval;
-			int x = lcd_width;
-			gRGB *dst = (gRGB *)dstptr;
-			const uint8_t *src = (const uint8_t *)srcptr;
-
-			while (x--)
-			{
-				pixval = *src++;
-				pixel32.a = 0xFF;
-				pixel32.r = pixval;
-				pixel32.g = pixval;
-				pixel32.b = pixval;
-				*dst++ = pixel32;
-			}
-
-			srcptr += _stride;
-			dstptr += pixmap32->surface->stride;
-		}
-		savePNG("/tmp/lcd.png", pixmap32);
-		break;
-	}
-
-	case 16:
-	{
-		for (int y = lcd_height; y != 0; --y)
-		{
-			gRGB pixel32;
-			uint16_t pixel16;
-			int x = lcd_width;
-			gRGB *dst = (gRGB *)dstptr;
-			const uint16_t *src = (const uint16_t *)srcptr;
-
-			while (x--)
-			{
-#if BYTE_ORDER == LITTLE_ENDIAN
-				pixel16 = bswap_16(*src++);
-#else
-				pixel16 = *src++;
-#endif
-				pixel32.a = 0xFF;
-				pixel32.r = (pixel16 << 3) & 0xF8;
-				pixel32.g = (pixel16 >> 3) & 0xFC;
-				pixel32.b = (pixel16 >> 8) & 0xF8;
-				*dst++ = pixel32;
-			}
-
-			srcptr += _stride;
-			dstptr += pixmap32->surface->stride;
-		}
-		savePNG("/tmp/lcd.png", pixmap32);
-		break;
-	}
-
-	case 32:
-	{
-		for (int y = lcd_height; y != 0; --y)
-		{
-			memcpy(dstptr, srcptr, lcd_width * pixmap32->surface->bypp);
-			srcptr += _stride;
-			dstptr += pixmap32->surface->stride;
-		}
-		savePNG("/tmp/lcd.png", pixmap32);
-		break;
-	}
-
-	default:
-		eDebug("[eDboxLCD] %d bpp not supported", bpp);
-	}
+	return;
 }

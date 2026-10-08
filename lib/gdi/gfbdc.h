@@ -5,16 +5,21 @@
 #include "gpixmap.h"
 #include "gmaindc.h"
 
+#ifndef SWIG
 class gFBDC: public gMainDC
 {
 	fbClass *fb;
 	int brightness, gamma, alpha;
 	gUnmanagedSurface surface;
 	gUnmanagedSurface surface_back;
+	gUnmanagedSurface surface_third;
+	int m_number_of_pages = 1;
 	unsigned char ramp[256], rampalpha[256]; // RGB ramp 0..255
 	void exec(const gOpcode *opcode);
 	void calcRamp();
 	void setPalette();
+	void rotateSurfaces();
+	int getSurfaceOffset(const gUnmanagedSurface &s) const;
 public:
 	void setResolution(int xres, int yres, int bpp = 32);
 	void reloadSettings();
@@ -34,5 +39,10 @@ public:
 	virtual ~gFBDC();
 	int islocked() const { return fb->islocked(); }
 };
+#endif
+#ifdef HAVE_OSDANIMATION
+void setAnimation_current(int a);
+void setAnimation_speed(int speed);
+#endif
 
 #endif

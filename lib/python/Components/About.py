@@ -5,6 +5,7 @@ import re
 from Tools.HardwareInfo import HardwareInfo
 from Components.SystemInfo import BoxInfo
 from sys import maxsize, modules, version_info
+from subprocess import PIPE, Popen
 
 
 def getVersionString():
@@ -153,10 +154,10 @@ def getDriverInstalledDate():
 	try:
 		from glob import glob
 		try:
-			driver = [x.split("-") for x in open(glob("/var/lib/opkg/info/*-dvb-modules-*.control")[0], "r") if x.startswith("Version:")][0]
+			driver = [x.split("-")[-2] for x in open(glob("/var/lib/opkg/info/*-dvb-modules-*.control")[0], "r") if x.startswith("Version:")][0]
 			if len(driver) == 2:
 				driver = driver[0].split('+')
-			return "%s-%s-%s" % (driver[1][:4], driver[1][4:6], driver[1][6:])
+			return "%s-%s-%s" % (driver[:4], driver[4:6], driver[6:])
 		except:
 			try:
 				driver = [x.split("Version:") for x in open(glob("/var/lib/opkg/info/*-dvb-proxy-*.control")[0], "r") if x.startswith("Version:")][0]
@@ -223,6 +224,15 @@ def getBoxUptime():
 	except:
 		return '-'
 
+def getOpenSSLVersion():
+	process = Popen(("/usr/bin/openssl", "version"), stdout=PIPE, stderr=PIPE, universal_newlines=True)
+	stdout, stderr = process.communicate()
+	if process.returncode == 0:
+		data = stdout.strip().split()
+		if len(data) > 1 and data[0] == "OpenSSL":
+			return data[1]
+	print("[About] Get OpenSSL version failed.")
+	return _("Unknown")
 
 # For modules that do "from About import about"
 about = modules[__name__]

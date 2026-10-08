@@ -66,9 +66,10 @@ struct eListboxStyle
 	ePtr<gPixmap> m_background, m_selection, m_selection_large;
 	int m_transparent_background;
 	int m_border_set;
-	gRGB m_background_color, m_background_color_selected,
-	m_foreground_color, m_foreground_color_selected, m_border_color, m_sliderborder_color, m_sliderforeground_color;
-	int m_background_color_set, m_foreground_color_set, m_background_color_selected_set, m_foreground_color_selected_set, m_sliderforeground_color_set, m_sliderborder_color_set, m_scrollbarsliderborder_size_set;
+	gRGB m_background_color, m_background_color_selected, m_foreground_color, m_foreground_color_selected, m_border_color;
+	int m_background_color_set, m_foreground_color_set, m_background_color_selected_set, m_foreground_color_selected_set;
+	gRGB m_scrollbarborder_color, m_scrollbarforeground_color, m_scrollbarbackground_color;
+	int m_scrollbarforeground_color_set, m_scrollbarbackground_color_set, m_scrollbarborder_color_set, m_scrollbarborder_width_set;
 		/*
 			{m_transparent_background m_background_color_set m_background}
 			{0 0 0} use global background color
@@ -87,7 +88,7 @@ struct eListboxStyle
 		alignBottom=alignRight,
 		alignBlock
 	};
-	int m_valign, m_halign, m_border_size, m_sliderborder_size, m_scrollbarsliderborder_size;
+	int m_valign, m_halign, m_border_size, m_scrollbarborder_width;
 	ePtr<gFont> m_font, m_secondfont;
 	ePoint m_text_offset;
 	int m_itemCornerRadius[2];
@@ -100,13 +101,16 @@ struct eListboxStyle
 	{
 		return m_itemCornerRadiusEdges[mode];
 	}
+	bool m_gradient_set[4], m_gradient_alphablend[4];
+	uint8_t m_gradient_direction[4];
+	std::vector<gRGB> m_gradient_colors[4];
 };
 #endif
 
 class eListbox: public eWidget
 {
 	void updateScrollBar();
-public:
+public: 
 	eListbox(eWidget *parent);
 	~eListbox();
 
@@ -121,7 +125,7 @@ public:
 	};
 	void setScrollbarMode(int mode);
 	void setWrapAround(bool);
-	enum { orHorizontal, orVertical };
+	enum { orHorizontal, orVertical, orGrid };
 	void setOrientation(int orientation);
 
 	void setContent(iListboxContent *content);
@@ -151,7 +155,17 @@ public:
 		moveEnd,
 		pageUp,
 		pageDown,
-		justCheck
+		justCheck,
+		moveStartTop,
+		moveStart,
+		prevItemPage,
+		prevPageItem,
+		prevItem,
+		nextItemPage,
+		nextPageItem,
+		nextItem,
+		prevPage,
+		nextPage
 	};
 
 	void setItemHeight(int h);
@@ -169,28 +183,27 @@ public:
 	void setSelectionPictureLarge(ePtr<gPixmap> &pixmap);
 	void setSelectionBorderHidden();
 
-	void setSliderPicture(ePtr<gPixmap> &pm);
-	void setScrollbarBackgroundPicture(ePtr<gPixmap> &pm);
-	void setScrollbarSliderBorderWidth(int size);
-	void setScrollbarWidth(int size);
-	void setScrollbarHeight(int size);
-
 	void setFont(gFont *font);
 	void setSecondFont(gFont *font);
 	void setVAlign(int align);
 	void setHAlign(int align);
 	void setTextOffset(const ePoint &textoffset);
 
-	void setSliderBorderColor(const gRGB &col);
-	void setSliderBorderWidth(int size);
-	void setSliderForegroundColor(gRGB &col);
+	void setScrollbarWidth(int width);
+	void setScrollbarHeight(int size);
+	void setScrollbarBorderWidth(int width);
+	void setScrollbarBorderColor(const gRGB &col);
+	void setScrollbarForegroundColor(const gRGB &col);
+	void setScrollbarBackgroundColor(const gRGB &col);
+	void setScrollbarPixmap(ePtr<gPixmap> &pm);
+	void setScrollbarBackgroundPixmap(ePtr<gPixmap> &pm);
 
 	int getScrollbarWidth() { return m_scrollbar_width; }
 	int getScrollbarHeight() { return m_scrollbar_height; }
 	int getMaxItemTextWidth() { return m_content->getMaxItemTextWidth(); }
 
-	void setItemCornerRadius(int radius, int edges);
-	void setItemCornerRadiusSelected(int radius, int edges);
+	void setItemCornerRadius(int radius, uint8_t edges);
+	void setItemCornerRadiusSelected(int radius, uint8_t edges);
 
 	static void setDefaultItemRadius(int radius, int radiusEdges)
 	{
@@ -202,6 +215,9 @@ public:
 		defaultItemRadius[1] = radius;
 		defaultItemRadiusEdges[1] = radiusEdges;
 	}
+	void setItemGradient(const gRGB &startcolor, const gRGB &midcolor, const gRGB &endcolor, uint8_t direction, bool alphablend);
+	void setItemGradientSelected(const gRGB &startcolor, const gRGB &midcolor, const gRGB &endcolor, uint8_t direction, bool alphablend);
+	void redrawItemByIndex(int index) { entryChanged(index); }
 
 #ifndef SWIG
 	struct eListboxStyle *getLocalStyle(void);
@@ -220,6 +236,7 @@ public:
 protected:
 	int event(int event, void *data=0, void *data2=0);
 	void recalcSize();
+	ePoint getItemPostion(int index);
 
 private:
 	int m_scrollbar_mode, m_prev_scrollbar_page;
@@ -228,13 +245,15 @@ private:
 
 	int m_scrollbar_width;
 	int m_scrollbar_height;
-	int m_top, m_left, m_selected;
+	int m_top, m_left, m_max_columns, m_max_rows, m_selected;
 	int m_itemheight;
 	int m_itemwidth;
 	int m_orientation;
 	int m_items_per_page;
+	int m_items_per_page_with_partials;
 	int m_selection_enabled;
-	void setItemCornerRadiusInternal(int radius, int edges, int index);
+	void setItemCornerRadiusInternal(int radius, uint8_t edges, int index);
+	void setItemGradientInternal(uint8_t index, const gRGB &startcolor, const gRGB &midcolor, const gRGB &endcolor, uint8_t direction, bool alphablend);
 
 	bool m_native_keys_bound;
 

@@ -22,9 +22,6 @@ class fbClass
 	int m_manual_blit;
 	int m_number_of_pages;
 	int m_phys_mem;
-	int m_phys_mem_base;
-	unsigned char *m_lfb_base;
-	int m_available_total;
 #ifdef SWIG
 	fbClass(const char *fb=FB_DEV);
 	~fbClass();
@@ -32,6 +29,11 @@ public:
 #else
 public:
 	unsigned char *lfb;
+#ifdef CONFIG_ION
+	int m_accel_fd;
+	unsigned long m_accel_phys_addr;
+	unsigned long getAccelPhysAddr() { return m_accel_phys_addr; }
+#endif
 	void enableManualBlit();
 	void disableManualBlit();
 	int showConsole(int state);
@@ -48,6 +50,14 @@ public:
 	void blit();
 	unsigned int Stride() { return stride; }
 	fb_cmap *CMAP() { return &cmap; }
+
+	// Callback invoked whenever the framebuffer lock state changes (see
+	// lock()/unlock() in fb.cpp). gEGLDC registers its own
+	// onFramebufferLockChanged here so it can hide/restore the OSD layer
+	// while ofgwrite is flashing (see gegldc.cpp's initEGL()/cleanupEGL()
+	// and m_lock_cleared). NULL by default; backends that don't need
+	// notification leave it alone.
+	static void (*lockChanged)(bool locked);
 
 	fbClass(const char *fb=FB_DEV);
 	~fbClass();

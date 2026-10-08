@@ -48,7 +48,6 @@ class eDVBCISlot: public iObject, public sigc::trackable
 	int slotid;
 	int fd;
 	ePtr<eSocketNotifier> notifier;
-	ePtr<eTimer> startup_timeout;
 	int state;
 	int m_ci_version;
 	std::map<uint16_t, uint8_t> running_services;
@@ -70,6 +69,7 @@ class eDVBCISlot: public iObject, public sigc::trackable
 	bool m_isCamMgrRoutingActive;
 	bool m_ciPlusRoutingDone;
 	int16_t m_ca_demux_id;
+	bool m_is_ca0_excluded;
 	uint16_t m_program_number;
 	int m_video_pid;
 	int m_audio_pid;
@@ -79,7 +79,7 @@ class eDVBCISlot: public iObject, public sigc::trackable
 	eMainloop *m_context;
 	int m_ciplus_routing_tunernum;
 	bool m_operator_profiles_disabled;
-	bool m_ca0_excluded;
+	int m_alt_ca_handling;
 	std::string m_ciplus_routing_input;
 	std::string m_ciplus_routing_ci_input;
 
@@ -108,11 +108,11 @@ class eDVBCISlot: public iObject, public sigc::trackable
 	int setCaParameter(eDVBServicePMTHandler *pmthandler);
 	void removeService(uint16_t program_number=0xFFFF);
 	int setSource(const std::string &source);
-	int setClockRate(int);
+	int setClockRate(const std::string &rate);
 	void determineCIVersion();
 	int setEnabled(bool);
-	static std::string getTunerLetter(int tuner_no) { return std::string(1, char(65 + tuner_no)); }
 public:
+	static std::string getTunerLetter(int tuner_no) { return std::string(1, char(65 + tuner_no)); }
 	enum {stateRemoved, stateInserted, stateInvalid, stateResetted, stateDisabled};
 	enum {versionUnknown = -1, versionCI = 0, versionCIPlus1 = 1, versionCIPlus2 = 2};
 	eDVBCISlot(eMainloop *context, int nr);
@@ -131,9 +131,10 @@ public:
 	int getSlotID();
 	int getNumOfServices();
 	int getVersion();
+	int getDescramblingOptions() { return m_alt_ca_handling; };
 	bool getIsOperatorProfileDisabled() { return m_operator_profiles_disabled; };
-	bool getIsCA0Excluded() { return m_ca0_excluded; };
 	int16_t getCADemuxID() { return m_ca_demux_id; };
+	bool getIsCA0Excluded() { return m_is_ca0_excluded; };
 	int getTunerNum() { return m_tunernum; };
 	int getUseCount() { return use_count; };
 	int getProgramNumber() { return (int)m_program_number; };
@@ -215,6 +216,7 @@ public:
 	void recheckPMTHandlers();
 	void executeRecheckPMTHandlersInMainloop();
 	void gotPMT(eDVBServicePMTHandler *pmthandler);
+	bool isCiConnected(eDVBServicePMTHandler *pmthandler);
 	void ciRemoved(eDVBCISlot *slot);
 	int getSlotState(int slot);
 
@@ -227,9 +229,8 @@ public:
 	int answerEnq(int slot, char *value);
 	int cancelEnq(int slot);
 	int getMMIState(int slot);
-	bool isCiConnected(eDVBServicePMTHandler *pmthandler);
 	int setInputSource(int tunerno, const std::string &source);
-	int setCIClockRate(int slot, int rate);
+	int setCIClockRate(int slot, const std::string &rate);
 	void setCIPlusRouting(int slotid);
 	void revertCIPlusRouting(int slotid);
 	bool canDescrambleMultipleServices(eDVBCISlot* slot);

@@ -9,7 +9,7 @@ from Components.Sources.List import List
 from Components.Label import Label, MultiColorLabel
 from Components.Pixmap import Pixmap, MultiPixmap
 from Components.MenuList import MenuList
-from Components.config import config, ConfigYesNo, ConfigIP, NoSave, ConfigText, ConfigPassword, ConfigSelection
+from Components.config import config, ConfigYesNo, ConfigIP, NoSave, ConfigText, ConfigPassword, ConfigSelection, ConfigMacText
 from Components.ConfigList import ConfigListScreen
 from Components.PluginComponent import plugins
 from Components.ActionMap import ActionMap, NumberActionMap, HelpableActionMap
@@ -17,6 +17,8 @@ from Tools.Directories import resolveFilename, SCOPE_PLUGINS, SCOPE_CURRENT_SKIN
 from Tools.LoadPixmap import LoadPixmap
 from Plugins.Plugin import PluginDescriptor
 from enigma import eTimer
+
+MODULE_NAME = __name__.split(".")[-1]
 
 
 class NetworkAdapterSelection(Screen, HelpableScreen):
@@ -208,6 +210,12 @@ class AdapterSetup(ConfigListScreen, HelpableScreen, Screen):
 			self.iface = networkinfo
 			self.essid = essid
 
+		self.getConfigMac = None
+		if self.iface == "eth0":
+			macAddr = iNetwork.getAdapterAttribute(self.iface, "mac")
+			if macAddr:
+				self.getConfigMac = NoSave(ConfigMacText(default=macAddr))
+
 		self.extended = None
 		self.applyConfigRef = None
 		self.finished_cb = None
@@ -321,6 +329,8 @@ class AdapterSetup(ConfigListScreen, HelpableScreen, Screen):
 				))
 				if self.hasGatewayConfigEntry.value:
 					self.list.append((_('Gateway'), self.gatewayConfigEntry))
+				if self.getConfigMac:
+					self.list.append((_('MAC address'), self.getConfigMac))
 
 			self.extended = None
 			self.configStrings = None
@@ -328,7 +338,7 @@ class AdapterSetup(ConfigListScreen, HelpableScreen, Screen):
 			for p in plugins.getPlugins(PluginDescriptor.WHERE_NETWORKSETUP):
 				call_fnc = p.fnc["ifaceSupported"](self.iface)
 				if call_fnc is not None:
-					if "WlanPluginEntry" in p.fnc:  # internally used only for WLAN Plugin
+					if "WlanPluginEntry" in p.fnc:
 						self.extended = call_fnc
 						if "configStrings" in p.fnc:
 							self.configStrings = p.fnc["configStrings"]
@@ -393,6 +403,15 @@ class AdapterSetup(ConfigListScreen, HelpableScreen, Screen):
 
 	def applyConfig(self, ret=False):
 		if ret:
+			if self.getConfigMac and self.getConfigMac.isChanged():
+				mac = self.getConfigMac.value
+				try:
+					with open("/etc/enigma2/hwmac", "w") as f:
+						f.write(mac)
+					os.system("ip link set dev " + self.iface + " address " + mac)
+				except Exception as e:
+					print("[NetworkSetup] Failed to write MAC address: " + str(e))
+
 			self.applyConfigRef = None
 			iNetwork.setAdapterAttribute(self.iface, "up", self.activateInterfaceEntry.value)
 			iNetwork.setAdapterAttribute(self.iface, "dhcp", self.dhcpConfigEntry.value)
@@ -559,7 +578,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 			return False
 		else:
 			try:
-				ifobj = Wireless(iface)  # a Wireless NIC Object
+				ifobj = Wireless(iface)
 				wlanresponse = ifobj.getAPaddr()
 			except IOError as xxx_todo_changeme:
 				(error_no, error_str) = xxx_todo_changeme.args
@@ -583,7 +602,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 					if self.queryWirelessDevice(self.iface):
 						self.session.openWithCallback(self.AdapterSetupClosed, AdapterSetup, self.iface)
 					else:
-						self.showErrorMessage()  # Display Wlan not available Message
+						self.showErrorMessage()
 			else:
 				self.session.openWithCallback(self.AdapterSetupClosed, AdapterSetup, self.iface)
 		if self["menulist"].getCurrent()[1] == 'test':
@@ -597,7 +616,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 				if self.queryWirelessDevice(self.iface):
 					self.session.openWithCallback(self.WlanScanClosed, WlanScan, self.iface)
 				else:
-					self.showErrorMessage()  # Display Wlan not available Message
+					self.showErrorMessage()
 		if self["menulist"].getCurrent()[1] == 'wlanstatus':
 			try:
 				from Plugins.SystemPlugins.WirelessLan.plugin import WlanStatus
@@ -607,7 +626,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 				if self.queryWirelessDevice(self.iface):
 					self.session.openWithCallback(self.WlanStatusClosed, WlanStatus, self.iface)
 				else:
-					self.showErrorMessage()  # Display Wlan not available Message
+					self.showErrorMessage()
 		if self["menulist"].getCurrent()[1] == 'lanrestart':
 			self.session.openWithCallback(self.restartLan, MessageBox, (_("Are you sure you want to restart your network interfaces?\n\n") + self.oktext))
 		if self["menulist"].getCurrent()[1] == 'openwizard':
@@ -690,7 +709,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 			callFnc = p.fnc["ifaceSupported"](self.iface)
 			if callFnc is not None:
 				self.extended = callFnc
-				if "WlanPluginEntry" in p.fnc:  # internally used only for WLAN Plugin
+				if "WlanPluginEntry" in p.fnc:
 					menu.append((_("Scan wireless networks"), "scanwlan"))
 					if iNetwork.getAdapterAttribute(self.iface, "up"):
 						menu.append((_("Show WLAN status"), "wlanstatus"))
@@ -722,7 +741,7 @@ class AdapterSetupConfiguration(Screen, HelpableScreen):
 					if self.queryWirelessDevice(self.iface):
 						self.session.openWithCallback(self.WlanStatusClosed, WlanStatus, self.iface)
 					else:
-						self.showErrorMessage()  # Display Wlan not available Message
+						self.showErrorMessage()
 			else:
 				self.updateStatusbar()
 		else:
@@ -914,41 +933,41 @@ class NetworkAdapterTest(Screen):
 			self["EditSettings_Text"].setForegroundColorNum(0)
 			self["NetworkInfo"].setPixmapNum(0)
 			self["NetworkInfo_Text"].setForegroundColorNum(1)
-			self["AdapterInfo"].setPixmapNum(1)  # active
-			self["AdapterInfo_Text"].setForegroundColorNum(2)  # active
+			self["AdapterInfo"].setPixmapNum(1)
+			self["AdapterInfo_Text"].setForegroundColorNum(2)
 		if button == 2:
 			self["AdapterInfo_Text"].setForegroundColorNum(1)
 			self["AdapterInfo"].setPixmapNum(0)
 			self["DhcpInfo"].setPixmapNum(0)
 			self["DhcpInfo_Text"].setForegroundColorNum(1)
-			self["NetworkInfo"].setPixmapNum(1)  # active
-			self["NetworkInfo_Text"].setForegroundColorNum(2)  # active
+			self["NetworkInfo"].setPixmapNum(1)
+			self["NetworkInfo_Text"].setForegroundColorNum(2)
 		if button == 3:
 			self["NetworkInfo"].setPixmapNum(0)
 			self["NetworkInfo_Text"].setForegroundColorNum(1)
 			self["IPInfo"].setPixmapNum(0)
 			self["IPInfo_Text"].setForegroundColorNum(1)
-			self["DhcpInfo"].setPixmapNum(1)  # active
-			self["DhcpInfo_Text"].setForegroundColorNum(2)  # active
+			self["DhcpInfo"].setPixmapNum(1)
+			self["DhcpInfo_Text"].setForegroundColorNum(2)
 		if button == 4:
 			self["DhcpInfo"].setPixmapNum(0)
 			self["DhcpInfo_Text"].setForegroundColorNum(1)
 			self["DNSInfo"].setPixmapNum(0)
 			self["DNSInfo_Text"].setForegroundColorNum(1)
-			self["IPInfo"].setPixmapNum(1)  # active
-			self["IPInfo_Text"].setForegroundColorNum(2)  # active
+			self["IPInfo"].setPixmapNum(1)
+			self["IPInfo_Text"].setForegroundColorNum(2)
 		if button == 5:
 			self["IPInfo"].setPixmapNum(0)
 			self["IPInfo_Text"].setForegroundColorNum(1)
 			self["EditSettingsButton"].setPixmapNum(0)
 			self["EditSettings_Text"].setForegroundColorNum(0)
-			self["DNSInfo"].setPixmapNum(1)  # active
-			self["DNSInfo_Text"].setForegroundColorNum(2)  # active
+			self["DNSInfo"].setPixmapNum(1)
+			self["DNSInfo_Text"].setForegroundColorNum(2)
 		if button == 6:
 			self["DNSInfo"].setPixmapNum(0)
 			self["DNSInfo_Text"].setForegroundColorNum(1)
-			self["EditSettingsButton"].setPixmapNum(1)  # active
-			self["EditSettings_Text"].setForegroundColorNum(2)  # active
+			self["EditSettingsButton"].setPixmapNum(1)
+			self["EditSettings_Text"].setForegroundColorNum(2)
 			self["AdapterInfo"].setPixmapNum(0)
 			self["AdapterInfo_Text"].setForegroundColorNum(1)
 
@@ -1051,32 +1070,32 @@ class NetworkAdapterTest(Screen):
 	def KeyOK(self):
 		self["infoshortcuts"].setEnabled(True)
 		self["shortcuts"].setEnabled(False)
-		if self.activebutton == 1:  # Adapter Check
+		if self.activebutton == 1:
 			self["InfoText"].setText(_("This test detects your configured LAN adapter."))
 			self["InfoTextBorder"].show()
 			self["InfoText"].show()
 			self["key_red"].setText(_("Back"))
-		if self.activebutton == 2:  # LAN Check
+		if self.activebutton == 2:
 			self["InfoText"].setText(_("This test checks whether a network cable is connected to your LAN adapter.\nIf you get a \"disconnected\" message:\n- verify that a network cable is attached\n- verify that the cable is not broken"))
 			self["InfoTextBorder"].show()
 			self["InfoText"].show()
 			self["key_red"].setText(_("Back"))
-		if self.activebutton == 3:  # DHCP Check
+		if self.activebutton == 3:
 			self["InfoText"].setText(_("This test checks whether your LAN adapter is set up for automatic IP address configuration with DHCP.\nIf you get a \"disabled\" message:\n- then your LAN adapter is configured for manual IP setup\n- verify thay you have entered the correct IP information in the adapter setup dialog.\nIf you get an \"enabeld\" message:\n- verify that you have a configured and working DHCP server in your network."))
 			self["InfoTextBorder"].show()
 			self["InfoText"].show()
 			self["key_red"].setText(_("Back"))
-		if self.activebutton == 4:  # IP Check
+		if self.activebutton == 4:
 			self["InfoText"].setText(_("This test checks whether a valid IP address is found for your LAN adapter.\nIf you get a \"unconfirmed\" message:\n- no valid IP address was found\n- please check your DHCP, cabling and adapter setup"))
 			self["InfoTextBorder"].show()
 			self["InfoText"].show()
 			self["key_red"].setText(_("Back"))
-		if self.activebutton == 5:  # DNS Check
+		if self.activebutton == 5:
 			self["InfoText"].setText(_("This test checks for configured nameservers.\nIf you get a \"unconfirmed\" message:\n- please check your DHCP, cabling and adapter setup\n- if you configured your nameservers manually please verify your entries in the \"Nameserver\" configuration"))
 			self["InfoTextBorder"].show()
 			self["InfoText"].show()
 			self["key_red"].setText(_("Back"))
-		if self.activebutton == 6:  # Edit Settings
+		if self.activebutton == 6:
 			self.session.open(AdapterSetup, self.iface)
 
 	def KeyYellow(self):
@@ -1204,7 +1223,7 @@ class NetworkAdapterTest(Screen):
 		self["DNSInfo_Text"].setForegroundColorNum(1)
 		self["EditSettings_Text"].show()
 		self["EditSettingsButton"].setPixmapNum(1)
-		self["EditSettings_Text"].setForegroundColorNum(2)  # active
+		self["EditSettings_Text"].setForegroundColorNum(2)
 		self["EditSettingsButton"].show()
 		self["key_yellow"].setText("")
 		self["key_green"].setText(_("Restart test"))

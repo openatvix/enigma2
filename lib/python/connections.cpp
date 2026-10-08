@@ -11,7 +11,11 @@ PSignal::~PSignal()
 
 void PSignal::callPython(ePyObject tuple)
 {
+	if (!m_list)
+		return;
 	int size = PyList_Size(m_list);
+	/* size == -1 means PyList_Size set an exception; the loop simply
+	   does not execute, and the exception is left set for the caller. */
 	int i;
 	for (i=0; i<size; ++i)
 	{

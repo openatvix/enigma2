@@ -27,7 +27,7 @@ void PutToDict(ePyObject &dict, const char *key, ePyObject item)
 
 void PutToDict(ePyObject &dict, const char *key, const char *value)
 {
-	ePyObject item = PyUnicode_FromString(value);
+	ePyObject item = value ? PyUnicode_FromString(value) : PyUnicode_FromString("");
 	if (item)
 	{
 		if (PyDict_SetItemString(dict, key, item))
@@ -41,20 +41,43 @@ void PutToDict(ePyObject &dict, const char *key, const char *value)
 static PyObject *createTuple(int pid, const char *type)
 {
 	PyObject *r = PyTuple_New(2);
-	PyTuple_SET_ITEM(r, 0, PyLong_FromLong(pid));
-	PyTuple_SET_ITEM(r, 1, PyUnicode_FromString(type));
+	if (!r)
+		return NULL;
+
+	PyObject *pidObj = PyLong_FromLong(pid);
+	if (!pidObj)
+	{
+		Py_DECREF(r);
+		return NULL;
+	}
+	PyTuple_SET_ITEM(r, 0, pidObj);
+
+	PyObject *typeObj = type ? PyUnicode_FromString(type) : PyUnicode_FromString("");
+	if (!typeObj)
+	{
+		Py_DECREF(r);
+		return NULL;
+	}
+	PyTuple_SET_ITEM(r, 1, typeObj);
+
 	return r;
 }
 
 static inline void PyList_AppendSteal(PyObject *list, PyObject *item)
 {
-	PyList_Append(list, item);
+	if (!list || !item)
+	{
+		Py_XDECREF(item);
+		return;
+	}
+	if (PyList_Append(list, item))
+		PyErr_Print();
 	Py_DECREF(item);
 }
 
 void frontendDataToDict(ePyObject &dest, ePtr<iDVBFrontendData> data)
 {
-	if (dest && PyDict_Check(dest))
+	if (dest && PyDict_Check(dest) && data)
 	{
 		PutToDict(dest, "tuner_number", data->getNumber());
 		PutToDict(dest, "tuner_type", data->getTypeDescription().c_str());
@@ -63,7 +86,7 @@ void frontendDataToDict(ePyObject &dest, ePtr<iDVBFrontendData> data)
 
 void frontendStatusToDict(ePyObject &dest, ePtr<iDVBFrontendStatus> status)
 {
-	if (dest && PyDict_Check(dest))
+	if (dest && PyDict_Check(dest) && status)
 	{
 		PutToDict(dest, "tuner_state", status->getStateDescription().c_str());
 		PutToDict(dest, "tuner_locked", status->getLocked());
@@ -78,7 +101,7 @@ void frontendStatusToDict(ePyObject &dest, ePtr<iDVBFrontendStatus> status)
 
 void transponderDataToDict(ePyObject &dest, ePtr<iDVBTransponderData> data)
 {
-	if (dest && PyDict_Check(dest))
+	if (dest && PyDict_Check(dest) && data)
 	{
 		int value;
 		PutToDict(dest, "tuner_type", data->getTunerType().c_str());
@@ -134,12 +157,17 @@ void transponderDataToDict(ePyObject &dest, ePtr<iDVBTransponderData> data)
 
 void streamingDataToDict(ePyObject &dest, ePtr<iStreamData> data)
 {
-	if (dest && PyDict_Check(dest))
+	if (dest && PyDict_Check(dest) && data)
 	{
 		int pmt, pcr, txt, adapter, demux, default_audio_pid;
 		std::vector<int> video, audio, subtitle;
 		unsigned int i;
 		ePyObject l = PyList_New(0);
+		if (!l)
+		{
+			PyErr_Print();
+			return;
+		}
 		PyList_AppendSteal(l, createTuple(0, "pat"));
 
 		data->getPmtPid(pmt);

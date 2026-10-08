@@ -4,6 +4,7 @@
 #include <lib/base/wrappers.h>
 #include <lib/dvb/decoder.h>
 #include <lib/components/tuxtxtapp.h>
+#include <lib/python/pythonconfig.h>
 #include <linux/dvb/audio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/dmx.h>
@@ -146,7 +147,11 @@ int eDVBAudio::startPid(int pid, int type)
 			eDebugNoNewLine("failed: %m\n");
 		else
 			eDebugNoNewLine("ok\n");
-		freeze();  // why freeze here?!? this is a problem when only a pid change is requested... because of the unfreeze logic in Decoder::setState
+
+		/* Do NOT freeze here. Freezing/unfreezing is controlled exclusively
+		 * by eTSMPEGDecoder::setState() via the state machine. Freezing inside
+		 * startPid caused black screens on PID-only changes because the
+		 * unfreeze logic in setState() was not always triggered. */
 		eDebugNoNewLineStart("[eDVBAudio%d] AUDIO_PLAY ", m_dev);
 		if (::ioctl(m_fd, AUDIO_PLAY) < 0)
 			eDebugNoNewLine("failed: %m\n");
@@ -243,7 +248,7 @@ int eDVBAudio::getPTS(pts_t &now)
 
 eDVBAudio::~eDVBAudio()
 {
-	unfreeze();  // why unfreeze here... but not unfreeze video in ~eDVBVideo ?!?
+	unfreeze();
 	if (m_fd >= 0)
 		::close(m_fd);
 	if (m_fd_demux >= 0)
@@ -257,6 +262,7 @@ int eDVBVideo::m_close_invalidates_attributes = -1;
 
 eDVBVideo::eDVBVideo(eDVBDemux *demux, int dev, bool fcc_enable)
 	: m_demux(demux), m_dev(dev), m_fcc_enable(fcc_enable),
+	m_hold_on_zap(false),
 	m_width(-1), m_height(-1), m_framerate(-1), m_aspect(-1), m_progressive(-1), m_gamma(-1)
 {
 	char filename[128] = {};
@@ -284,28 +290,21 @@ eDVBVideo::eDVBVideo(eDVBDemux *demux, int dev, bool fcc_enable)
 		m_fd_demux = -1;
 	}
 
+	/* Always force the video source to the demuxer for live TV. The
+	 * zapmodeDM "hold" logic is about VIDEO_STOP flag and fd lifetime,
+	 * not about VIDEO_SELECT_SOURCE. Doing this unconditionally removes
+	 * the black-screen regression caused by a lingering VIDEO_SOURCE_MEMORY
+	 * (from showSinglePic or a failed previous zap). */
 #ifndef DREAMBOX
 	if (m_fd >= 0)
 	{
 		::ioctl(m_fd, VIDEO_SELECT_SOURCE, demux ? VIDEO_SOURCE_DEMUX : VIDEO_SOURCE_HDMI);
 	}
 #endif
+
+	/* Attribute invalidation detection. Independent of zap mode. */
 	if (m_close_invalidates_attributes < 0)
 	{
-		/*
-		 * Some hardware does not invalidate the video attributes,
-		 * when we open the video device.
-		 * If that is the case, we cannot rely on receiving VIDEO_EVENTs
-		 * when the new video attributes are available, because they might
-		 * be equal to the old attributes.
-		 * Instead, we should just query the old attributes, and assume
-		 * them to be correct untill we receive VIDEO_EVENTs.
-		 *
-		 * Though this is merely a cosmetic issue, we do try to detect
-		 * whether attributes are invalidated or not.
-		 * So we can avoid polling for valid attributes, when we know
-		 * we can rely on VIDEO_EVENTs.
-		 */
 		readApiSize(m_fd, m_width, m_height, m_aspect);
 		m_close_invalidates_attributes = (m_width == -1) ? 1 : 0;
 	}
@@ -318,9 +317,39 @@ eDVBVideo::eDVBVideo(eDVBDemux *demux, int dev, bool fcc_enable)
 #define VIDEO_STREAMTYPE_MPEG4_Part2 4
 #define VIDEO_STREAMTYPE_VC1_SM 5
 #define VIDEO_STREAMTYPE_MPEG1 6
+#ifdef DREAMBOX
+#define VIDEO_STREAMTYPE_H265_HEVC 22
+#else
 #define VIDEO_STREAMTYPE_H265_HEVC 7
+#endif
 #define VIDEO_STREAMTYPE_AVS 16
 #define VIDEO_STREAMTYPE_AVS2 40
+
+static int videoStreamTypeFor(int type)
+{
+	switch (type)
+	{
+	default:
+	case eDVBVideo::MPEG2:
+		return VIDEO_STREAMTYPE_MPEG2;
+	case eDVBVideo::MPEG4_H264:
+		return VIDEO_STREAMTYPE_MPEG4_H264;
+	case eDVBVideo::MPEG1:
+		return VIDEO_STREAMTYPE_MPEG1;
+	case eDVBVideo::MPEG4_Part2:
+		return VIDEO_STREAMTYPE_MPEG4_Part2;
+	case eDVBVideo::VC1:
+		return VIDEO_STREAMTYPE_VC1;
+	case eDVBVideo::VC1_SM:
+		return VIDEO_STREAMTYPE_VC1_SM;
+	case eDVBVideo::H265_HEVC:
+		return VIDEO_STREAMTYPE_H265_HEVC;
+	case eDVBVideo::AVS:
+		return VIDEO_STREAMTYPE_AVS;
+	case eDVBVideo::AVS2:
+		return VIDEO_STREAMTYPE_AVS2;
+	}
+}
 
 int eDVBVideo::startPid(int pid, int type)
 {
@@ -329,37 +358,7 @@ int eDVBVideo::startPid(int pid, int type)
 
 	if (m_fd >= 0)
 	{
-		int streamtype = VIDEO_STREAMTYPE_MPEG2;
-		switch (type)
-		{
-		default:
-		case MPEG2:
-			break;
-		case MPEG4_H264:
-			streamtype = VIDEO_STREAMTYPE_MPEG4_H264;
-			break;
-		case MPEG1:
-			streamtype = VIDEO_STREAMTYPE_MPEG1;
-			break;
-		case MPEG4_Part2:
-			streamtype = VIDEO_STREAMTYPE_MPEG4_Part2;
-			break;
-		case VC1:
-			streamtype = VIDEO_STREAMTYPE_VC1;
-			break;
-		case VC1_SM:
-			streamtype = VIDEO_STREAMTYPE_VC1_SM;
-			break;
-		case H265_HEVC:
-			streamtype = VIDEO_STREAMTYPE_H265_HEVC;
-			break;
-		case AVS:
-			streamtype = VIDEO_STREAMTYPE_AVS;
-			break;
-		case AVS2:
-			streamtype = VIDEO_STREAMTYPE_AVS2;
-			break;
-		}
+		int streamtype = videoStreamTypeFor(type);
 
 		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_SET_STREAMTYPE %d - ", m_dev, streamtype);
 		if (::ioctl(m_fd, VIDEO_SET_STREAMTYPE, streamtype) < 0)
@@ -408,7 +407,69 @@ int eDVBVideo::startPid(int pid, int type)
 
 	if (m_fd >= 0)
 	{
-		freeze();  // why freeze here?!? this is a problem when only a pid change is requested... because of the unfreeze logic in Decoder::setState
+		/* Freezing is now handled exclusively by eTSMPEGDecoder::setState()
+		 * via the state table. Do not freeze here. */
+		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_PLAY ", m_dev);
+		if (::ioctl(m_fd, VIDEO_PLAY) < 0)
+			eDebugNoNewLine("failed: %m\n");
+		else
+			eDebugNoNewLine("ok\n");
+	}
+	return 0;
+}
+
+/* Reuse the already-open video fd for a new PID. This does not close the
+ * device, so the driver's last displayed frame is preserved in "hold" mode.
+ * Used on PID-only changes when we already have an m_video instance. */
+int eDVBVideo::changePid(int pid, int type)
+{
+	if (m_fcc_enable)
+		return 0;
+
+	if (m_fd >= 0)
+	{
+		int streamtype = videoStreamTypeFor(type);
+
+		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_SET_STREAMTYPE %d - ", m_dev, streamtype);
+		if (::ioctl(m_fd, VIDEO_SET_STREAMTYPE, streamtype) < 0)
+			eDebugNoNewLine("failed: %m\n");
+		else
+			eDebugNoNewLine("ok\n");
+	}
+
+	if (m_fd_demux >= 0)
+	{
+		dmx_pes_filter_params pes = {};
+		pes.pid      = pid;
+		pes.input    = DMX_IN_FRONTEND;
+		pes.output   = DMX_OUT_DECODER;
+		switch (m_dev)
+		{
+		case 0: pes.pes_type = DMX_PES_VIDEO0; break;
+		case 1: pes.pes_type = DMX_PES_VIDEO1; break;
+		case 2: pes.pes_type = DMX_PES_VIDEO2; break;
+		case 3: pes.pes_type = DMX_PES_VIDEO3; break;
+		}
+		pes.flags = 0;
+
+		eDebugNoNewLineStart("[eDVBVideo%d] DMX_SET_PES_FILTER pid=0x%04x ", m_dev, pid);
+		if (::ioctl(m_fd_demux, DMX_SET_PES_FILTER, &pes) < 0)
+		{
+			eDebugNoNewLine("failed: %m\n");
+			return -errno;
+		}
+		eDebugNoNewLine("ok\n");
+		eDebugNoNewLineStart("[eDVBVideo%d] DEMUX_START ", m_dev);
+		if (::ioctl(m_fd_demux, DMX_START) < 0)
+		{
+			eDebugNoNewLine("failed: %m\n");
+			return -errno;
+		}
+		eDebugNoNewLine("ok\n");
+	}
+
+	if (m_fd >= 0)
+	{
 		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_PLAY ", m_dev);
 		if (::ioctl(m_fd, VIDEO_PLAY) < 0)
 			eDebugNoNewLine("failed: %m\n");
@@ -419,6 +480,11 @@ int eDVBVideo::startPid(int pid, int type)
 }
 
 void eDVBVideo::stop()
+{
+	stop(1); /* default: freeze last frame (hold) */
+}
+
+void eDVBVideo::stop(int freeze_last_frame)
 {
 	if (m_fcc_enable)
 		return;
@@ -434,8 +500,8 @@ void eDVBVideo::stop()
 
 	if (m_fd >= 0)
 	{
-		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_STOP ", m_dev);
-		if (::ioctl(m_fd, VIDEO_STOP, 1) < 0)
+		eDebugNoNewLineStart("[eDVBVideo%d] VIDEO_STOP %d ", m_dev, freeze_last_frame);
+		if (::ioctl(m_fd, VIDEO_STOP, freeze_last_frame) < 0)
 			eDebugNoNewLine("failed: %m\n");
 		else
 			eDebugNoNewLine("ok\n");
@@ -553,11 +619,11 @@ void eDVBVideo::video_event(int)
 			{
 				struct iTSMPEGDecoder::videoEvent event = {};
 				event.type = iTSMPEGDecoder::videoEvent::eventSizeChanged;
-				m_aspect = event.aspect = evt.u.size.aspect_ratio == 0 ? 2 : 3;  // convert dvb api to etsi
+				m_aspect = event.aspect = evt.u.size.aspect_ratio == 0 ? 2 : 3;
 				m_height = event.height = evt.u.size.h;
 				m_width = event.width = evt.u.size.w;
 				eDebugNoNewLine("SIZE_CHANGED %dx%d aspect %d\n", m_width, m_height, m_aspect);
-				/* emit */ m_event(event);
+				m_event(event);
 			}
 			else if (evt.type == VIDEO_EVENT_FRAME_RATE_CHANGED)
 			{
@@ -565,7 +631,7 @@ void eDVBVideo::video_event(int)
 				event.type = iTSMPEGDecoder::videoEvent::eventFrameRateChanged;
 				m_framerate = event.framerate = evt.u.frame_rate;
 				eDebugNoNewLine("FRAME_RATE_CHANGED %d fps\n", m_framerate);
-				/* emit */ m_event(event);
+				m_event(event);
 			}
 			else if (evt.type == 16 /*VIDEO_EVENT_PROGRESSIVE_CHANGED*/)
 			{
@@ -573,22 +639,15 @@ void eDVBVideo::video_event(int)
 				event.type = iTSMPEGDecoder::videoEvent::eventProgressiveChanged;
 				m_progressive = event.progressive = evt.u.frame_rate;
 				eDebugNoNewLine("PROGRESSIVE_CHANGED %d\n", m_progressive);
-				/* emit */ m_event(event);
+				m_event(event);
 			}
 			else if (evt.type == 17 /*VIDEO_EVENT_GAMMA_CHANGED*/)
 			{
 				struct iTSMPEGDecoder::videoEvent event = {};
 				event.type = iTSMPEGDecoder::videoEvent::eventGammaChanged;
-				/*
-				 * Possible gamma values
-				 * 0: Traditional gamma - SDR luminance range
-				 * 1: Traditional gamma - HDR luminance range
-				 * 2: SMPTE ST2084 (aka HDR10)
-				 * 3: Hybrid Log-gamma
-				 */
 				m_gamma = event.gamma = evt.u.frame_rate;
 				eDebugNoNewLine("GAMMA_CHANGED %d\n", m_gamma);
-				/* emit */ m_event(event);
+				m_event(event);
 			}
 			else
 				eDebugNoNewLine("unhandled DVBAPI Video Event %d\n", evt.type);
@@ -609,7 +668,7 @@ int eDVBVideo::readApiSize(int fd, int &xres, int &yres, int &aspect)
 	{
 		xres = size.w;
 		yres = size.h;
-		aspect = size.aspect_ratio == 0 ? 2 : 3;  // convert dvb api to etsi
+		aspect = size.aspect_ratio == 0 ? 2 : 3;
 		return 0;
 	}
 	return -1;
@@ -617,7 +676,6 @@ int eDVBVideo::readApiSize(int fd, int &xres, int &yres, int &aspect)
 
 int eDVBVideo::getWidth()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_width == -1)
@@ -628,7 +686,6 @@ int eDVBVideo::getWidth()
 
 int eDVBVideo::getHeight()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_height == -1)
@@ -639,7 +696,6 @@ int eDVBVideo::getHeight()
 
 int eDVBVideo::getAspect()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_aspect == -1)
@@ -650,7 +706,6 @@ int eDVBVideo::getAspect()
 
 int eDVBVideo::getProgressive()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_progressive == -1)
@@ -665,7 +720,6 @@ int eDVBVideo::getProgressive()
 
 int eDVBVideo::getFrameRate()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_framerate == -1)
@@ -681,7 +735,6 @@ int eDVBVideo::getFrameRate()
 
 int eDVBVideo::getGamma()
 {
-	/* when closing the video device invalidates the attributes, we can rely on VIDEO_EVENTs */
 	if (!m_close_invalidates_attributes)
 	{
 		if (m_gamma == -1)
@@ -716,18 +769,10 @@ int eDVBPCR::startPid(int pid)
 	pes.output   = DMX_OUT_DECODER;
 	switch (m_dev)
 	{
-	case 0:
-		pes.pes_type = DMX_PES_PCR0;
-		break;
-	case 1:
-		pes.pes_type = DMX_PES_PCR1;
-		break;
-	case 2:
-		pes.pes_type = DMX_PES_PCR2;
-		break;
-	case 3:
-		pes.pes_type = DMX_PES_PCR3;
-		break;
+	case 0: pes.pes_type = DMX_PES_PCR0; break;
+	case 1: pes.pes_type = DMX_PES_PCR1; break;
+	case 2: pes.pes_type = DMX_PES_PCR2; break;
+	case 3: pes.pes_type = DMX_PES_PCR3; break;
 	}
 	pes.flags    = 0;
 	eDebugNoNewLineStart("[eDVBPCR%d] DMX_SET_PES_FILTER pid=0x%04x ", m_dev, pid);
@@ -786,18 +831,10 @@ int eDVBTText::startPid(int pid)
 	pes.output   = DMX_OUT_DECODER;
 	switch (m_dev)
 	{
-	case 0:
-		pes.pes_type = DMX_PES_TELETEXT0;
-		break;
-	case 1:
-		pes.pes_type = DMX_PES_TELETEXT1;
-		break;
-	case 2:
-		pes.pes_type = DMX_PES_TELETEXT2;
-		break;
-	case 3:
-		pes.pes_type = DMX_PES_TELETEXT3;
-		break;
+	case 0: pes.pes_type = DMX_PES_TELETEXT0; break;
+	case 1: pes.pes_type = DMX_PES_TELETEXT1; break;
+	case 2: pes.pes_type = DMX_PES_TELETEXT2; break;
+	case 3: pes.pes_type = DMX_PES_TELETEXT3; break;
 	}
 	pes.flags    = 0;
 
@@ -836,12 +873,24 @@ eDVBTText::~eDVBTText()
 
 DEFINE_REF(eTSMPEGDecoder);
 
+void eTSMPEGDecoder::applyZapMode()
+{
+	std::string zapmodeDM = eConfigManager::getConfigValue("config.misc.zapmodeDM");
+	m_hold_on_zap = (zapmodeDM == "hold");
+	if (m_video)
+		m_video->setHoldOnZap(m_hold_on_zap);
+}
+
 int eTSMPEGDecoder::setState()
 {
 	int res = 0;
 
+	/* Refresh zap mode from config on every state transition, so a live
+	 * setting change takes effect without a restart. */
+	applyZapMode();
+
 	int noaudio = (m_state != statePlay) && (m_state != statePause);
-	int nott = noaudio; /* actually same conditions */
+	int nott = noaudio;
 
 	if ((noaudio && m_audio) || (!m_audio && !noaudio))
 		m_changed |= changeAudio | changeState;
@@ -850,7 +899,8 @@ int eTSMPEGDecoder::setState()
 		m_changed |= changeText | changeState;
 
 	const char *decoder_states[] = {"stop", "pause", "play", "decoderfastforward", "trickmode", "slowmotion"};
-	eDebug("[eTSMPEGDecoder] decoder state: %s, vpid=%04x, apid=%04x", decoder_states[m_state], m_vpid, m_apid);
+	eDebug("[eTSMPEGDecoder] decoder state: %s, vpid=%04x, apid=%04x (zapmode=%s)",
+		decoder_states[m_state], m_vpid, m_apid, m_hold_on_zap ? "hold" : "black");
 
 	int changed = m_changed;
 	if (m_changed & changePCR)
@@ -863,9 +913,28 @@ int eTSMPEGDecoder::setState()
 	{
 		if (m_video)
 		{
-			m_video->stop();
-			m_video = 0;
-			m_video_event_conn = 0;
+			/* Only stop the video if we are going to destroy it.
+			 * If we can reuse the fd (PID-only change), we call
+			 * changePid() below instead. */
+			bool keep_open = (!m_hold_on_zap) ? false : true;
+			/* On a full teardown, still need to stop the demux filter.
+			 *
+			 * IMPORTANT (DM920 / Broadcom quirk):
+			 * The VIDEO_STOP ioctl argument is inverted on these SoCs
+			 * relative to the DVB API spec:
+			 *     arg 0 -> freeze last frame (hold)
+			 *     arg 1 -> black screen
+			 * We therefore pass the inverse of what the DVB spec expects,
+			 * otherwise "Black screen" gives hold and "Hold screen" gives
+			 * a black screen (the exact symptom being fixed here). */
+			m_video->stop(m_hold_on_zap ? 0 : 1);
+			if (!keep_open || (m_vpid < 0) || (m_vpid >= 0x1FFF))
+			{
+				m_video = 0;
+				m_video_event_conn = 0;
+			}
+			/* If keep_open is true and vpid valid, we keep m_video alive
+			 * and changePid() will be called in the changeVideo block. */
 		}
 	}
 	if (m_changed & changeAudio)
@@ -879,7 +948,7 @@ int eTSMPEGDecoder::setState()
 		if (m_text)
 		{
 			m_text->stop();
-			if (m_demux && m_decoder == 0)	// Tuxtxt caching actions only on primary decoder
+			if (m_demux && m_decoder == 0)
 				eTuxtxtApp::getInstance()->stopCaching();
 		}
 		m_text = 0;
@@ -908,10 +977,27 @@ int eTSMPEGDecoder::setState()
 	{
 		if ((m_vpid >= 0) && (m_vpid < 0x1FFF))
 		{
-			m_video = new eDVBVideo(m_demux, m_decoder, m_fcc_enable);
-			m_video->connectEvent(sigc::mem_fun(*this, &eTSMPEGDecoder::video_event), m_video_event_conn);
-			if (m_video->startPid(m_vpid, m_vtype))
-				res = -1;
+			if (m_video)
+			{
+				/* Reuse the existing video fd. This preserves the frozen
+				 * frame in "hold" mode, because we never closed the fd. */
+				if (m_video->changePid(m_vpid, m_vtype))
+					res = -1;
+			}
+			else
+			{
+				m_video = new eDVBVideo(m_demux, m_decoder, m_fcc_enable);
+				m_video->setHoldOnZap(m_hold_on_zap);
+				m_video->connectEvent(sigc::mem_fun(*this, &eTSMPEGDecoder::video_event), m_video_event_conn);
+				if (m_video->startPid(m_vpid, m_vtype))
+					res = -1;
+			}
+		}
+		else
+		{
+			/* vpid is invalid: drop the video object. */
+			m_video = 0;
+			m_video_event_conn = 0;
 		}
 		m_changed &= ~changeVideo;
 	}
@@ -923,14 +1009,14 @@ int eTSMPEGDecoder::setState()
 			if (m_text->startPid(m_textpid))
 				res = -1;
 
-			if (m_demux && m_decoder == 0)	// Tuxtxt caching actions only on primary decoder
+			if (m_demux && m_decoder == 0)
 			{
 				uint8_t demux = 0;
 				m_demux->getCADemuxID(demux);
 				eTuxtxtApp::getInstance()->startCaching(m_textpid, demux);
 			}
 		}
-		else if (m_demux && m_decoder == 0)	// Tuxtxt caching actions only on primary decoder
+		else if (m_demux && m_decoder == 0)
 			eTuxtxtApp::getInstance()->resetPid();
 
 		m_changed &= ~changeText;
@@ -938,7 +1024,6 @@ int eTSMPEGDecoder::setState()
 
 	if (changed & (changeState|changeVideo|changeAudio))
 	{
-					/* play, slowmotion, fast-forward */
 		int state_table[6][4] =
 			{
 				/* [stateStop] =                 */ {0, 0, 0},
@@ -1003,7 +1088,6 @@ RESULT eTSMPEGDecoder::setHwAC3Delay(int delay)
 	return -1;
 }
 
-
 RESULT eTSMPEGDecoder::setPCMDelay(int delay)
 {
 	return m_decoder == 0 ? setHwPCMDelay(delay) : -1;
@@ -1017,7 +1101,8 @@ RESULT eTSMPEGDecoder::setAC3Delay(int delay)
 eTSMPEGDecoder::eTSMPEGDecoder(eDVBDemux *demux, int decoder)
 	: m_demux(demux),
 		m_vpid(-1), m_vtype(-1), m_apid(-1), m_atype(-1), m_pcrpid(-1), m_textpid(-1),
-		m_changed(0), m_decoder(decoder), m_video_clip_fd(-1), m_showSinglePicTimer(eTimer::create(eApp)),
+		m_changed(0), m_decoder(decoder), m_has_audio(false), m_hold_on_zap(false),
+		m_video_clip_fd(-1), m_showSinglePicTimer(eTimer::create(eApp)),
 		m_fcc_fd(-1), m_fcc_enable(false), m_fcc_state(fcc_state_stop), m_fcc_feid(-1), m_fcc_vpid(-1), m_fcc_vtype(-1), m_fcc_pcrpid(-1)
 {
 	if (m_demux)
@@ -1031,16 +1116,18 @@ eTSMPEGDecoder::eTSMPEGDecoder(eDVBDemux *demux, int decoder)
 	sprintf(filename, "/dev/dvb/adapter%d/audio%d", m_demux ? m_demux->adapter : 0, m_decoder);
 	m_has_audio = !access(filename, W_OK);
 
-	if (m_demux && m_decoder == 0)	// Tuxtxt caching actions only on primary decoder
+	applyZapMode();
+
+	if (m_demux && m_decoder == 0)
 		eTuxtxtApp::getInstance()->initCache();
 }
 
 void eTSMPEGDecoder::freeDecoder()
 {
-	// Release demux filter objects by closing their fds (via destructors).
-	// Unlike stop() which uses ioctl(DMX_STOP), close() lets the kernel
-	// clean up filters without going through the Broadcom playpump path.
-	// This prevents deadlocks/crashes on mipsel PVR-sourced demuxes.
+	/* Release demux filter objects by closing their fds (via destructors).
+	 * Unlike stop() which uses ioctl(DMX_STOP), close() lets the kernel
+	 * clean up filters without going through the Broadcom playpump path.
+	 * This prevents deadlocks/crashes on mipsel PVR-sourced demuxes. */
 	m_video = nullptr;
 	m_audio = nullptr;
 	m_pcr = nullptr;
@@ -1059,7 +1146,7 @@ eTSMPEGDecoder::~eTSMPEGDecoder()
 	fccStop();
 	fccFreeFD();
 
-	if (m_demux && m_decoder == 0)	// Tuxtxt caching actions only on primary decoder
+	if (m_demux && m_decoder == 0)
 		eTuxtxtApp::getInstance()->freeCache();
 }
 
@@ -1076,7 +1163,6 @@ RESULT eTSMPEGDecoder::setVideoPID(int vpid, int type)
 
 RESULT eTSMPEGDecoder::setAudioPID(int apid, int type)
 {
-	/* do not set an audio pid on decoders without audio support */
 	if (!m_has_audio) apid = -1;
 
 	if ((m_apid != apid) || (m_atype != type))
@@ -1114,7 +1200,6 @@ int eTSMPEGDecoder::getAudioChannel()
 
 RESULT eTSMPEGDecoder::setSyncPCR(int pcrpid)
 {
-	/* we do not need pcr on decoders without audio support */
 	if (!m_has_audio) pcrpid = -1;
 
 	if (m_pcrpid != pcrpid)
@@ -1170,7 +1255,6 @@ RESULT eTSMPEGDecoder::pause()
 
 RESULT eTSMPEGDecoder::setFastForward(int frames_to_skip)
 {
-	// fast forward is only possible if video data is present
 	if (!m_video)
 		return -1;
 
@@ -1181,13 +1265,10 @@ RESULT eTSMPEGDecoder::setFastForward(int frames_to_skip)
 	m_ff_sm_ratio = frames_to_skip;
 	m_changed |= changeState;
 	return setState();
-
-//		return m_video->setFastForward(frames_to_skip);
 }
 
 RESULT eTSMPEGDecoder::setSlowMotion(int repeat)
 {
-	// slow motion is only possible if video data is present
 	if (!m_video)
 		return -1;
 
@@ -1202,7 +1283,6 @@ RESULT eTSMPEGDecoder::setSlowMotion(int repeat)
 
 RESULT eTSMPEGDecoder::setTrickmode()
 {
-	// trickmode is only possible if video data is present
 	if (!m_video)
 		return -1;
 
@@ -1306,7 +1386,7 @@ RESULT eTSMPEGDecoder::showSinglePic(const char *filename)
 					eDebug("[eTSMPEGDecoder] VIDEO_CLEAR_BUFFER: %m");
 				while(pos <= static_cast<size_t>(s.st_size-4) && !(seq_end_avail = (!iframe[pos] && !iframe[pos+1] && iframe[pos+2] == 1 && iframe[pos+3] == 0xB7)))
 					++pos;
-				if ((iframe[3] >> 4) != 0xE) // no pes header
+				if ((iframe[3] >> 4) != 0xE)
 					writeAll(m_video_clip_fd, pes_header, sizeof(pes_header));
 				else
 					iframe[4] = iframe[5] = 0x00;
@@ -1342,7 +1422,7 @@ void eTSMPEGDecoder::finishShowSinglePic()
 		if (ioctl(m_video_clip_fd, VIDEO_STOP, 0) < 0)
 			eDebug("[eTSMPEGDecoder] VIDEO_STOP failed: %m");
 		if (ioctl(m_video_clip_fd, VIDEO_SELECT_SOURCE, VIDEO_SOURCE_DEMUX) < 0)
-				eDebug("[eTSMPEGDecoder] VIDEO_SELECT_SOURCE DEMUX failed: %m");
+			eDebug("[eTSMPEGDecoder] VIDEO_SELECT_SOURCE DEMUX failed: %m");
 		close(m_video_clip_fd);
 		m_video_clip_fd = -1;
 	}
@@ -1356,7 +1436,7 @@ RESULT eTSMPEGDecoder::connectVideoEvent(const sigc::slot<void(struct videoEvent
 
 void eTSMPEGDecoder::video_event(struct videoEvent event)
 {
-	/* emit */ m_video_event(event);
+	m_video_event(event);
 }
 
 int eTSMPEGDecoder::getVideoWidth()
@@ -1414,8 +1494,6 @@ int eTSMPEGDecoder::getVideoGamma()
 
 RESULT eTSMPEGDecoder::prepareFCC(int fe_id, int vpid, int vtype, int pcrpid)
 {
-	//eDebug("[eTSMPEGDecoder] prepareFCC vp : %d, vt : %d, pp : %d, fe : %d", vpid, vtype, pcrpid, fe_id);
-
 	if ((fccGetFD() == -1) || (fccSetPids(fe_id, vpid, vtype, pcrpid) < 0) || (fccStart() < 0))
 	{
 		fccFreeFD();
@@ -1467,7 +1545,6 @@ RESULT eTSMPEGDecoder::fccDecoderStop()
 
 	m_fcc_state = fcc_state_ready;
 
-	/* stop pcr, video, audio, text */
 	finishShowSinglePic();
 
 	m_vpid = m_apid = m_pcrpid = m_textpid = pidNone;
@@ -1480,8 +1557,6 @@ RESULT eTSMPEGDecoder::fccDecoderStop()
 
 RESULT eTSMPEGDecoder::fccUpdatePids(int fe_id, int vpid, int vtype, int pcrpid)
 {
-	//eDebug("[eTSMPEGDecoder] vp : %d, vt : %d, pp : %d, fe : %d", vpid, vtype, pcrpid, fe_id);
-
 	if ((fe_id != m_fcc_feid) || (vpid != m_fcc_vpid) || (vtype != m_fcc_vtype) || (pcrpid != m_fcc_pcrpid))
 	{
 		fccStop();
@@ -1526,7 +1601,6 @@ RESULT eTSMPEGDecoder::fccStop()
 		eDebug("[eTSMPEGDecoder] FCC is already stopped!");
 		return 0;
 	}
-
 	else if (m_fcc_state == fcc_state_decoding)
 	{
 		fccDecoderStop();
@@ -1556,13 +1630,11 @@ RESULT eTSMPEGDecoder::fccSetPids(int fe_id, int vpid, int vtype, int pcrpid)
 		eDebug("[eTSMPEGDecoder] FCC_SET_FRONTEND_ID failed! (%m)");
 		return -1;
 	}
-
 	else if(ioctl(m_fcc_fd, FCC_SET_PCRPID, pcrpid) < 0)
 	{
 		eDebug("[eTSMPEGDecoder] FCC_SET_PCRPID failed! (%m)");
 		return -1;
 	}
-
 	else if (ioctl(m_fcc_fd, FCC_SET_VPID, vpid) < 0)
 	{
 		eDebug("[eTSMPEGDecoder] FCC_SET_VPID failed! (%m)");
@@ -1605,7 +1677,6 @@ RESULT eTSMPEGDecoder::fccSetPids(int fe_id, int vpid, int vtype, int pcrpid)
 	m_fcc_vtype = vtype;
 	m_fcc_pcrpid = pcrpid;
 
-	//eDebug("[eTSMPEGDecoder] SET PIDS OK!");
 	return 0;
 }
 

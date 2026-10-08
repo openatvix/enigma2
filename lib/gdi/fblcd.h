@@ -48,6 +48,13 @@ public:
 	void unlock();
 	int islocked() { return locked; }
 	void dumpLCD(bool);
+
+	// Stubs for the pure-virtual methods declared in eLCD (lib/gdi/lcd.h).
+	// The front-panel LCD driven via eFbLCD does not implement LED or dump
+	// functionality, but the base class declares them as pure virtual, so
+	// these no-op overrides are needed to make eFbLCD concrete.
+	virtual int setLED(int value, int option) { return 0; };
+	virtual void setDump(bool) {};
 };
 
 #endif
