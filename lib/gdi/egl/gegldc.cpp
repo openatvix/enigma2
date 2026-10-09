@@ -345,7 +345,12 @@ bool gEGLDC::recreateWindowSurface() {
 	if (!eglMakeCurrent(m_egl_display, m_egl_surfaces[0], m_egl_surfaces[0], m_egl_context)) {
 		eDebug("[gEGLDC] eglMakeCurrent failed after recreating window surface: 0x%x - discarding the surface", eglGetError());
 		eglMakeCurrent(m_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, m_egl_context);
-		eglDestroySurface(m_egl_display, m_egl_surfaces[0]);
+		// Deliberately NOT eglDestroySurface()'d: a surface that fails
+		// eglMakeCurrent() with EGL_BAD_NATIVE_WINDOW (0x300b) is bound to a native
+		// window Nexus hasn't finished settling, and libnxpl dereferences that
+		// window's null internal state (SIGSEGV, fault address 0x4) when asked to
+		// destroy it. Dropping our handle leaks a small EGL surface per failed
+		// attempt (bounded by the retry loop) instead of crashing the box.
 		m_egl_surfaces[0] = EGL_NO_SURFACE;
 		return false;
 	}
@@ -1774,6 +1779,38 @@ void gEGLDC::flushTextBatch() {
 
 void gEGLDC::drawTextVertices(const std::vector<float>& vertices) {
 	const int vertex_count = (int)(vertices.size() / 8); // 8 floats per vertex
+	const std::vector<eRect>& rects = m_text_batch_clip.rects;
+
+	if (rects.size() > 1) {
+		// A multi-rect clip used to re-submit the WHOLE batch once per rect and let
+		// the scissor discard most of it. Submit only the glyph quads that touch
+		// each rect instead. Quad layout (see renderGlyph()): 48 floats, vertex 0 =
+		// (x, y), vertex 1 y = y + h, vertex 2 x = x + w.
+		static std::vector<float> s_cull; // render thread only
+		for (unsigned int i = 0; i < rects.size(); ++i) {
+			const float rl = (float)rects[i].left(), rt = (float)rects[i].top();
+			const float rr = rl + (float)rects[i].width(), rb = rt + (float)rects[i].height();
+			s_cull.clear();
+			for (size_t q = 0; q + 48 <= vertices.size(); q += 48) {
+				const float* quad = &vertices[q];
+				if (quad[16] <= rl || quad[0] >= rr || quad[9] <= rt || quad[1] >= rb)
+					continue;
+				s_cull.insert(s_cull.end(), quad, quad + 48);
+			}
+			if (s_cull.empty())
+				continue;
+			std::chrono::steady_clock::time_point vbo_t0;
+			if (m_profile)
+				vbo_t0 = std::chrono::steady_clock::now();
+			m_text_shader.setVertexData(s_cull.data(), (int)(s_cull.size() / 8));
+			if (m_profile)
+				m_prof.vbo_ms += msSince(vbo_t0);
+			setGlScissor(rects[i]);
+			glDrawArrays(GL_TRIANGLES, 0, (int)(s_cull.size() / 8));
+			m_text_shader.endVertexData();
+		}
+		return;
+	}
 
 	std::chrono::steady_clock::time_point vbo_t0;
 	if (m_profile)
@@ -1783,8 +1820,8 @@ void gEGLDC::drawTextVertices(const std::vector<float>& vertices) {
 		m_prof.vbo_ms += msSince(vbo_t0);
 
 	// m_text_batch_clip, not m_current_clip - see its declaration comment.
-	for (unsigned int i = 0; i < m_text_batch_clip.rects.size(); ++i) {
-		setGlScissor(m_text_batch_clip.rects[i]);
+	for (unsigned int i = 0; i < rects.size(); ++i) {
+		setGlScissor(rects[i]);
 		glDrawArrays(GL_TRIANGLES, 0, vertex_count);
 	}
 
@@ -2310,24 +2347,10 @@ void gEGLDC::exec(const gOpcode* opcode) {
 			// clearOverlayArea()) and must run before gDC::exec() regardless,
 			// since it protects against whatever CPU rasterization *might*
 			// happen during it, which isn't known until after it runs.
-			//
-			// A marked character (markedpos >= 0, e.g. the selected character
-			// or the whole focused text field during editing) also forces
-			// that CPU rasterization fallback, for the same reason GS_INVERT
-			// does in the renderPara case below: the inverted foreground/
-			// background swap that marks it isn't a flat color renderGlyph()
-			// (font.cpp) can express, so eTextPara::blit() never offers it to
-			// the GPU atlas path. Without clearing the staging area first,
-			// the composite pass then uploads whatever stale content the
-			// shared m_pixmap already held at this screen position - typically
-			// the previous frame's selection highlight bar - right on top of
-			// the freshly rasterized glyphs, which is what shows up as a
-			// highlight-colored bar covering the text.
-			//
-			// Gated on ->border/->markedpos specifically rather than
-			// unconditionally since both are known up front here, and the
-			// overwhelming majority of text draws have neither.
-			if (opcode->parm.renderText->border || opcode->parm.renderText->markedpos >= 0) {
+			// Gated on ->border specifically rather than unconditionally
+			// since it's known up front here, and the overwhelming majority
+			// of text draws have no border to begin with.
+			if (opcode->parm.renderText->border) {
 				eRect clear_area = area;
 				clear_area.moveBy(m_current_offset);
 				clearOverlayArea(clear_area);
@@ -2693,6 +2716,7 @@ void gEGLDC::applyPendingResolutionChange() {
 	// icon is wiped with it; where it survives (fixed-size window, e.g. Hisi -
 	// see updatePhysicalSize()) the skin's full repaint covers the old icon.
 	// See m_spinner_active's comment (gegldc.h).
+	const bool spinner_was_active = m_spinner_active;
 	m_spinner_active = false;
 	releaseSpinnerGpu();
 
@@ -2718,7 +2742,11 @@ void gEGLDC::applyPendingResolutionChange() {
 	// GbquadWindowProvider::onResolutionChanged() for why (stretch scales to
 	// whatever size Nexus was last told, not this canvas's actual current
 	// size). That size is the physical one, not the logical canvas.
-	if (m_window_provider && !physical_unchanged) {
+	// Where the EGL surface is recreated below, the window is updated there instead:
+	// only after the old surface has been released and destroyed, never while it is
+	// still bound to the native window being modified.
+	const bool recreate_window_surface = isInitialized() && m_window_provider && !m_window_provider->usesPixmapSurface() && !physical_unchanged;
+	if (m_window_provider && !physical_unchanged && !recreate_window_surface) {
 		eDebug("[gEGLDC] resize: updating native window to %dx%d", m_phys_width, m_phys_height);
 		m_window_provider->onResolutionChanged(m_phys_width, m_phys_height);
 		eDebug("[gEGLDC] resize: native window updated");
@@ -2743,7 +2771,7 @@ void gEGLDC::applyPendingResolutionChange() {
 	// resizes a window surface. Not a guaranteed fix (this driver's exact
 	// failure mode was never confirmed), but a real candidate rather than
 	// another blind guess.
-	if (isInitialized() && m_window_provider && !m_window_provider->usesPixmapSurface() && !physical_unchanged) {
+	if (recreate_window_surface) {
 		// Give the old shadow buffer's GPU memory back BEFORE the surface (and its
 		// buffers) is recreated at the new size: holding both at once is what made
 		// the new 2560x1440 shadow texture fail to allocate on the GigaBlue.
@@ -2751,6 +2779,19 @@ void gEGLDC::applyPendingResolutionChange() {
 			destroyShadowFramebuffer();
 			glFinish();
 		}
+		// Same for textures: loading the new skin has already queued every old
+		// skin texture for deletion (hundreds, ~35MB), but they are only freed
+		// at the next frame - after this resize. The window surface's buffers
+		// (3 x 2560x1440x4) are then allocated with all of them still resident;
+		// on the GigaBlue that allocation fails (EGL_BAD_NATIVE_WINDOW on
+		// eglMakeCurrent, then EGL_BAD_ALLOC on every retry). Free them now, and
+		// everything evictable too - it re-uploads on demand. Pending batches
+		// were flushed by exec() before this runs.
+		m_texture_manager.processDeletions();
+		const size_t released = m_texture_manager.releaseUnusedTextures();
+		m_texture_manager.processDeletions();
+		glFinish();
+		eDebug("[gEGLDC] resize: released GPU textures before recreating the window surface (%zu evicted)", released);
 		eDebug("[gEGLDC] resize: releasing context and destroying EGL surface");
 		eglMakeCurrent(m_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, m_egl_context);
 
@@ -2759,6 +2800,11 @@ void gEGLDC::applyPendingResolutionChange() {
 			m_egl_surfaces[0] = EGL_NO_SURFACE;
 		}
 		eDebug("[gEGLDC] resize: EGL surface destroyed");
+
+		// Only now, with no EGL surface bound to it, update the native window.
+		eDebug("[gEGLDC] resize: updating native window to %dx%d", m_phys_width, m_phys_height);
+		m_window_provider->onResolutionChanged(m_phys_width, m_phys_height);
+		eDebug("[gEGLDC] resize: native window updated");
 
 		// The Nexus native window settles asynchronously after the update/hide/show
 		// above: a surface created too early can come back "valid" yet fail
@@ -2811,6 +2857,15 @@ void gEGLDC::applyPendingResolutionChange() {
 		}
 	}
 
+	// Fixed-size window (libMali/Hisi): the surface survives the resize, so the last
+	// spinner frame drawn for the old canvas stays in its buffers - the skin is still
+	// loading, nothing repaints it, and the restarted spinner (new canvas, new position)
+	// then shows up as a second, rotating icon beside this frozen one. Wipe the buffers.
+	// Skipped for a shadow FBO (flip() overwrites the window from it) and when the surface
+	// was recreated above (already cleared there).
+	if (spinner_was_active && physical_unchanged && isInitialized() && !m_surface_lost)
+		clearWindowSurfaceTransparent();
+
 	if (isInitialized()) {
 		// Set once in initEGL() (right after context creation, same "basic GL
 		// state" step) and never touched again until now - a stale viewport
@@ -2830,28 +2885,17 @@ void gEGLDC::applyPendingResolutionChange() {
 		m_text_shader.setResolution((float)pending_w, (float)pending_h);
 	}
 
-	// On a window surface WITHOUT a shadow FBO, the window surface itself
-	// retains its content across eglSwapBuffers() (EGL_BUFFER_PRESERVED or
-	// the driver's own behavior). When the canvas size changes here, the
-	// pixels the previous canvas left behind - notably any spinner frame
-	// drawn during the earlier boot canvas (720x576 on dm920, before the
-	// skin is loaded) - are still sitting in the window surface at
-	// whatever coordinates they had, scaled into the new layout. The skin
-	// only repaints dirty regions after this point, so anything it does
-	// not touch (a stale spinner at mid-left, old background, etc.) stays
-	// visible indefinitely. Explicitly clear the window surface here so
-	// the skin's next paint starts from a known-blank canvas and every
-	// leftover from the previous canvas size is wiped.
-	//
-	// (The shadow-FBO case above already clears itself: createShadowFramebuffer()
-	// runs glClear(GL_COLOR_BUFFER_BIT) on the freshly created FBO texture. Only
-	// the direct-to-window-surface path - m_use_shadow_fbo == false - needs this.)
-	if (!m_use_shadow_fbo && isInitialized() && m_egl_surfaces[0] != EGL_NO_SURFACE) {
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glScissor(0, 0, m_phys_width, m_phys_height);
-		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
-		eDebug("[gEGLDC] resolution change: cleared window surface to transparent");
+	// m_shadow_fbo/m_shadow_texture were sized for whatever resolution was
+	// current when createShadowFramebuffer() first ran (initEGL(), against
+	// this canvas's construction-time size - see egl_init.cpp) and never
+	// resized since. Recreate at the new size, same as initEGL() does the
+	// first time.
+	if (m_use_shadow_fbo) {
+		destroyShadowFramebuffer();
+		if (!recreateShadowFramebuffer()) {
+			eDebug("[gEGLDC] failed to recreate shadow framebuffer at %dx%d after resolution change - will keep retrying.", pending_w, pending_h);
+			m_shadow_retry_time = std::chrono::steady_clock::now();
+		}
 	}
 }
 
