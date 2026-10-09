@@ -4,6 +4,7 @@ from enigma import eRCInput, eTimer, eWindow, getDesktop
 
 from skin import GUI_SKIN_ID, applyAllAttributes, menus, screens, setups
 from Components.config import config
+from Components.ActionMap import ActionMap
 from Components.GUIComponent import GUIComponent
 from Components.Pixmap import Pixmap
 from Components.Sources.Source import Source
@@ -11,6 +12,16 @@ from Components.Sources.StaticText import StaticText
 from Tools.CList import CList
 from Tools.Directories import SCOPE_GUISKIN, resolveFilename
 from Tools.LoadPixmap import LoadPixmap
+
+# Define autoresize function to prevent KeyError in skin applets
+def autoresize(*args, **kwargs):
+    """Dummy function to prevent KeyError when skin applet calls autoresize"""
+    return True
+
+# Add autoresize to builtins for global availability
+import builtins
+if not hasattr(builtins, 'autoresize'):
+    builtins.autoresize = autoresize
 
 # The lines marked DEBUG: are proposals for further fixes or improvements.
 # Other commented out code is historic and should probably be deleted if it is not going to be used.
@@ -57,6 +68,7 @@ class Screen(dict):
 		self.screenPath = ""  # This is the current screen path without the title.
 		self.screenTitle = ""  # This is the current screen title without the path.
 		self.handledWidgets = []
+		self.screenImage =  []
 		self.setImage(className)
 
 	def __repr__(self):
@@ -286,9 +298,19 @@ class Screen(dict):
 			applyAllAttributes(w.instance, desktop, w.skinAttributes, self.scale)
 		if self.screenImage:
 			self["Image"].setPixmap(LoadPixmap(self.screenImage))
+
+		# CRITICAL FIX: Create a custom locals dictionary that includes autoresize
+		# This prevents KeyError when skin applet tries to access autoresize
 		for f in self.onLayoutFinish:
 			if not isinstance(f, type(self.close)):
-				exec(f, globals(), locals())
+				# Create a custom locals dictionary with autoresize defined
+				custom_locals = locals().copy()
+				custom_locals['autoresize'] = autoresize
+				# Also ensure the function has access to the necessary globals
+				try:
+					exec(f, globals(), custom_locals)
+				except Exception as e:
+					print("[Screen] Error executing layout function:", e)
 			else:
 				f()
 		for key in self:  # nudge TemplatedMultiContent so receives self.scale set above

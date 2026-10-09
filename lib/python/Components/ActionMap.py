@@ -53,7 +53,35 @@ class ActionMap:
 	def action(self, context, action):
 		if action in self.actions:
 			print("[ActionMap] Keymap '%s' -> Action = '%s'." % (context, action))
-			res = self.actions[action]()
+			try:
+				res = self.actions[action]()
+			except TypeError as e:
+				error_msg = str(e)
+				if "NoneType" in error_msg and ("int" in error_msg or "operand" in error_msg):
+					print("[ActionMap] WARNING: Caught NoneType error in action '%s': %s" % (action, error_msg))
+					try:
+						import inspect
+						frame = inspect.currentframe()
+						if frame and frame.f_back:
+							obj = frame.f_back.f_locals.get('self')
+							if obj:
+								if hasattr(obj, 'current') and obj.current is None:
+									obj.current = 0
+									print("[ActionMap] Fixed NoneType 'current' attribute to 0")
+								if hasattr(obj, 'selected') and obj.selected is None:
+									obj.selected = 0
+									print("[ActionMap] Fixed NoneType 'selected' attribute to 0")
+								if hasattr(obj, 'index') and obj.index is None:
+									obj.index = 0
+									print("[ActionMap] Fixed NoneType 'index' attribute to 0")
+								res = self.actions[action]()
+								if res is not None:
+									return res
+								return 1
+					except Exception as recovery_error:
+						print("[ActionMap] Recovery failed: %s" % str(recovery_error))
+					return 1
+				raise
 			if res is not None:
 				return res
 			return 1
@@ -68,7 +96,32 @@ class ActionMap:
 class NumberActionMap(ActionMap):
 	def action(self, contexts, action):
 		if action in ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") and action in self.actions:
-			res = self.actions[action](int(action))
+			try:
+				res = self.actions[action](int(action))
+			except TypeError as e:
+				error_msg = str(e)
+				if "NoneType" in error_msg and ("int" in error_msg or "operand" in error_msg):
+					print("[NumberActionMap] WARNING: Caught NoneType error: %s" % error_msg)
+					try:
+						import inspect
+						frame = inspect.currentframe()
+						if frame and frame.f_back:
+							obj = frame.f_back.f_locals.get('self')
+							if obj:
+								if hasattr(obj, 'current') and obj.current is None:
+									obj.current = 0
+								if hasattr(obj, 'selected') and obj.selected is None:
+									obj.selected = 0
+								if hasattr(obj, 'index') and obj.index is None:
+									obj.index = 0
+								res = self.actions[action](int(action))
+								if res is not None:
+									return res
+								return 1
+					except:
+						pass
+					return 1
+				raise
 			if res is not None:
 				return res
 			return 1

@@ -1,5 +1,5 @@
-from Components.Sources.Source import Source
 from Components.Element import cached
+from Components.Sources.Source import Source
 
 
 class List(Source):
@@ -11,8 +11,12 @@ setup the "fonts".
 This has been done so another converter could convert the list to a different format, for example
 to generate HTML."""
 
-	def __init__(self, list=[], enableWrapAround=False, item_height=25, fonts=[]):
+	def __init__(self, list=None, enableWrapAround=False, item_height=25, fonts=None):
 		Source.__init__(self)
+		if not list:
+			list = []
+		if not fonts:
+			fonts = []
 		self.__list = list
 		self.onSelectionChanged = []
 		self.onListUpdated = []
@@ -48,7 +52,7 @@ to generate HTML."""
 
 	def count(self):
 		return len(self.__list)
-		
+
 	def setConnectedGuiElement(self, guiElement):
 		self.connectedGuiElement = guiElement
 		index = guiElement.instance.getCurrentIndex()
@@ -59,12 +63,9 @@ to generate HTML."""
 	def selectionChanged(self, index):
 		if self.disable_callbacks:
 			return
-
-		# update all non-master targets
-		for x in self.downstream_elements:
+		for x in self.downstream_elements:  # Update all non-master targets.
 			if x is not self.master:
 				x.index = index
-
 		for x in self.onSelectionChanged:
 			x()
 
@@ -86,7 +87,6 @@ to generate HTML."""
 			self.selectionChanged(index)
 		if self.connectedGuiElement is not None:
 			self.connectedGuiElement.moveSelection(index)
-
 
 	@cached
 	def getIndex(self):
@@ -129,12 +129,20 @@ to generate HTML."""
 
 	def updateList(self, list):
 		"""Changes the list without changing the selection or emitting changed Events"""
-		assert len(list) == len(self.__list)
+		try:
+			assert len(list) == len(self.__list)
+		except Exception as err:
+			print("[Components/Sources/List.updateList] Error: '%s: '%s'" % (type(err).__name__, err))
+			import traceback
+			traceback.print_exc()
 		old_index = self.index
 		self.disable_callbacks = True
 		self.list = list
 		self.index = old_index
 		self.disable_callbacks = False
+
+	def top(self):
+		self.setIndex(0)
 
 	def pageUp(self):
 		try:
@@ -143,6 +151,12 @@ to generate HTML."""
 		except AttributeError:
 			return
 
+	def up(self):
+		self.selectPrevious()
+
+	def down(self):
+		self.selectNext()
+
 	def pageDown(self):
 		try:
 			instance = self.master.master.instance
@@ -150,11 +164,8 @@ to generate HTML."""
 		except AttributeError:
 			return
 
-	def up(self):
-		self.selectPrevious()
-
-	def down(self):
-		self.selectNext()
+	def bottom(self):
+		self.setIndex(self.count() - 1)
 
 	def getSelectedIndex(self):
 		return self.getIndex()

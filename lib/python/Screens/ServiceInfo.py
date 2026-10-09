@@ -93,6 +93,8 @@ class ServiceInfo(Screen):
 		self.transponder_info = self.info = self.service = self.feinfo = self.IPTV = None
 		self.show_all = True
 		self.play_service = session.nav.getCurrentlyPlayingServiceReference()
+		
+		# Fixed: Handle case when serviceref is provided but different from playing service
 		if serviceref and not (self.play_service and self.play_service == serviceref):
 			self.type = TYPE_TRANSPONDER_INFO
 			self.skinName = "ServiceInfoSimple"
@@ -109,11 +111,21 @@ class ServiceInfo(Screen):
 					self.feinfo = None
 					serviceref = self.play_service
 					self.transponder_info = serviceref and eServiceCenter.getInstance().info(serviceref).getInfoObject(serviceref, iServiceInformation.sTransponderData)
+			
+			# Fixed: Check if play_service exists and has toString method
 			if self.play_service:
-				refstr = self.play_service.toString()
-				reftype = self.play_service.type
-				if "%3a//" in refstr and reftype not in (1, 257, 4098, 4114):
-					self.IPTV = True
+				try:
+					refstr = self.play_service.toString()
+					reftype = self.play_service.type
+					if refstr and "%3a//" in refstr and reftype not in (1, 257, 4098, 4114):
+						self.IPTV = True
+					else:
+						self.IPTV = False
+				except AttributeError:
+					self.IPTV = False
+			else:
+				self.IPTV = False
+				
 			self.audio = self.service and self.service.audioTracks()
 			self.number_of_tracks = self.audio and self.audio.getNumberOfTracks() or 0
 			self.sub_list = self.getSubtitleList()
@@ -133,12 +145,19 @@ class ServiceInfo(Screen):
 			self.setTitle(_("Service info - service & PIDs"))
 			if self.feinfo or self.transponder_info:
 				self["key_blue"].text = self["blue"].text = _("Tuner setting values")
-			if self.session.nav.getCurrentlyPlayingServiceOrGroup():
-				name = ServiceReference(self.play_service).getServiceName()
-				refstr = self.play_service.toString()
+			
+			# Fixed: Check if play_service exists and has toString method
+			if self.play_service and self.session.nav.getCurrentlyPlayingServiceOrGroup():
+				try:
+					name = ServiceReference(self.play_service).getServiceName()
+					refstr = self.play_service.toString()
+				except AttributeError:
+					name = _("N/A")
+					refstr = _("N/A")
 			else:
 				name = _("N/A")
 				refstr = _("N/A")
+				
 			resolution = "-"
 			if self.info:
 				from Components.Converter.PliExtraInfo import codec_data
@@ -149,9 +168,16 @@ class ServiceInfo(Screen):
 					fps = (self.info.getInfo(iServiceInformation.sFrameRate) + 500) // 1000
 					if fps in (0, -1):
 						try:
-							fps = (int(open("/proc/stb/vmpeg/0/framerate", "r").read()) + 500) // 1000
+							# Try standard framerate first
+							with open("/proc/stb/vmpeg/0/framerate", "r") as f:
+								fps = (int(f.read()) + 500) // 1000
 						except (ValueError, IOError):
-							pass
+							try:
+								# Fallback to fallback_framerate if standard file doesn't exist
+								with open("/proc/stb/vmpeg/0/fallback_framerate", "r") as f:
+									fps = (int(f.read()) + 500) // 1000
+							except (ValueError, IOError):
+								pass
 					resolution = "%s - %dx%d - %s" % (videocodec, width, height, fps)
 					resolution += (" i", " p", "")[self.info.getInfo(iServiceInformation.sProgressive)]
 					aspect = self.getServiceInfoValue(iServiceInformation.sAspect)
@@ -161,21 +187,50 @@ class ServiceInfo(Screen):
 					resolution += " - %s" % gamma
 			self.toggle_pid_button()
 			track_list = self.get_track_list()
+			
+			# Fixed: Handle refstr splitting safely
+			refstr_short = _("N/A")
+			if refstr and refstr != _("N/A"):
+				try:
+					refstr_short = ":".join(refstr.split(":")[:9]) if (":/" in refstr or "%3a//" in refstr) else refstr
+				except:
+					refstr_short = refstr
+					
 			fillList = [
 				(_("Service name"), name, TYPE_TEXT),
 				(_("Videocodec, size & format"), resolution, TYPE_TEXT),
-				(_("Service reference"), ":".join(refstr.split(":")[:9]) if ":/" in refstr or "%3a//" in refstr else refstr, TYPE_TEXT)
+				(_("Service reference"), refstr_short, TYPE_TEXT)
 			]
+			
+			# Fixed: Handle URL extraction safely
 			if self.IPTV:  # IPTV 4097 5001, no PIDs shown
-				fillList.append((_("URL"), refstr.split(":")[10].replace("%3a", ":"), TYPE_TEXT))
+				url = _("N/A")
+				if refstr and refstr != _("N/A") and len(refstr.split(":")) > 10:
+					try:
+						url = refstr.split(":")[10].replace("%3a", ":")
+					except:
+						url = _("N/A")
+				fillList.append((_("URL"), url, TYPE_TEXT))
 				fillList.extend(track_list)
 			else:
-				if ":/" in refstr:  # mp4 videos, dvb-s-t recording
-					fillList.append((_("Filename"), refstr.split(":")[10], TYPE_TEXT))
+				if refstr and refstr != _("N/A") and ":/" in refstr:  # mp4 videos, dvb-s-t recording
+					filename = _("N/A")
+					if len(refstr.split(":")) > 10:
+						try:
+							filename = refstr.split(":")[10]
+						except:
+							filename = _("N/A")
+					fillList.append((_("Filename"), filename, TYPE_TEXT))
 				else:  # fallback, movistartv, live dvb-s-t
 					fillList.append((_("Provider"), self.getServiceInfoValue(iServiceInformation.sProvider), TYPE_TEXT))
-					if "%3a//" in refstr:  # live dvb-s-t
-						fillList.append((_("URL"), refstr.split(":")[10].replace("%3a", ":"), TYPE_TEXT))
+					if refstr and refstr != _("N/A") and "%3a//" in refstr:  # live dvb-s-t
+						url = _("N/A")
+						if len(refstr.split(":")) > 10:
+							try:
+								url = refstr.split(":")[10].replace("%3a", ":")
+							except:
+								url = _("N/A")
+						fillList.append((_("URL"), url, TYPE_TEXT))
 				fillList.extend([
 					(_("Namespace & Orbital pos."), self.namespace(self.getServiceInfoValue(iServiceInformation.sNamespace)), TYPE_TEXT),
 					(_("TSID"), self.getServiceInfoValue(iServiceInformation.sTSID), TYPE_VALUE_HEX_DEC, 4),

@@ -1,14 +1,13 @@
 import os
+import re
 
 from Components.config import config, ConfigSubList, ConfigSubsection, ConfigSlider
 from Tools.BoundFunction import boundFunction
-
 import NavigationInstance
 from enigma import iRecordableService
 
 
 class FanControl:
-	# ATM there's only support for one fan
 	def __init__(self):
 		if os.path.exists("/proc/stb/fp/fan_vlt") or os.path.exists("/proc/stb/fp/fan_pwm") or os.path.exists("/proc/stb/fp/fan_speed"):
 			self.fancount = 1
@@ -85,23 +84,56 @@ class FanControl:
 		return os.path.exists("/proc/stb/fp/fan_vlt") or os.path.exists("/proc/stb/fp/fan_pwm")
 
 	def getFanSpeed(self, fanid):
-		return int(open("/proc/stb/fp/fan_speed", "r").readline().strip()[:-4])
+		try:
+			with open("/proc/stb/fp/fan_speed", "r") as f:
+				data = f.readline().strip()
+				if not data:
+					return 0
+				# Extract numeric value using regex (handles "1234 RPM", "1234", "1234rpm", etc.)
+				match = re.search(r'(\d+)', data)
+				if match:
+					return int(match.group(1))
+				return 0
+		except (IOError, OSError, ValueError):
+			return 0
 
 	def getVoltage(self, fanid):
-		return int(open("/proc/stb/fp/fan_vlt", "r").readline().strip(), 16)
+		try:
+			with open("/proc/stb/fp/fan_vlt", "r") as f:
+				data = f.readline().strip()
+				if data:
+					return int(data, 16)
+				return 0
+		except (IOError, OSError, ValueError):
+			return 0
 
 	def setVoltage(self, fanid, value):
-		if value > 255:
+		if value > 255 or value < 0:
 			return
-		open("/proc/stb/fp/fan_vlt", "w").write("%x" % value)
+		try:
+			with open("/proc/stb/fp/fan_vlt", "w") as f:
+				f.write("%x" % value)
+		except (IOError, OSError):
+			pass
 
 	def getPWM(self, fanid):
-		return int(open("/proc/stb/fp/fan_pwm", "r").readline().strip(), 16)
+		try:
+			with open("/proc/stb/fp/fan_pwm", "r") as f:
+				data = f.readline().strip()
+				if data:
+					return int(data, 16)
+				return 0
+		except (IOError, OSError, ValueError):
+			return 0
 
 	def setPWM(self, fanid, value):
-		if value > 255:
+		if value > 255 or value < 0:
 			return
-		open("/proc/stb/fp/fan_pwm", "w").write("%x" % value)
+		try:
+			with open("/proc/stb/fp/fan_pwm", "w") as f:
+				f.write("%x" % value)
+		except (IOError, OSError):
+			pass
 
 
 fancontrol = FanControl()

@@ -95,6 +95,30 @@ class ScrollLabel(GUIComponent):
 		self.split and self.right_text.move(ePoint(self.column, -self.curPos))
 		self.selectionChanged()
 
+	def goTop(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(0)
+
+	def goPageUp(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(self.currentPosition - self.pageHeight)
+
+	def goLineUp(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(self.currentPosition - self.sliderScroll)
+
+	def goLineDown(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(self.currentPosition + self.sliderScroll)
+
+	def goPageDown(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(self.currentPosition + self.pageHeight)
+
+	def goBottom(self):
+		if self.TotalTextHeight > self.pageHeight:
+			self.setPos(self.TotalTextHeight - self.pageHeight)
+
 	def setText(self, text, showBottom=False):
 		self.message = text
 		text = text.rstrip()
@@ -137,6 +161,12 @@ class ScrollLabel(GUIComponent):
 			self.setPos(self.curPos + self.pageHeight)
 			self.updateScrollbar()
 
+	def moveBottom(self):
+		self.goBottom()
+
+	def moveTop(self):
+		self.goTop()
+
 	def homePage(self):
 		self.setPos(0)
 		self.updateScrollbar()
@@ -169,6 +199,8 @@ class ScrollLabel(GUIComponent):
 
 	def getText(self):
 		return self.message
+
+	text = property(getText, setText)
 
 	def selectionChanged(self):
 		for x in self.onSelectionChanged:

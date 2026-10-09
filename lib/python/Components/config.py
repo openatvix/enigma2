@@ -66,6 +66,15 @@ KEY_9 = ACTIONKEY_9
 #            loads the default if saved_value is 'None' (default) or invalid.
 #   save()   stores _value into saved_value, or stores 'None' if it should not be stored.
 #
+
+
+setupOnSave = {}  # This is used to trigger setup callbacks on save, it is populated by setup modules which want to use it. It's used in openwebif to trigger setup callbacks when saving settings via the web interface. It is a dictionary with section names as keys and callback functions as values.
+
+
+def setOnSaveCallback(setup, callback):
+	setupOnSave[setup] = callback
+
+
 class ConfigElement:
 	def __init__(self):
 		self.saved_value = None

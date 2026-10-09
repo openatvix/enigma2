@@ -107,7 +107,7 @@ def InitSkins():
 		for file in listdir(userFolder):
 			if file.lower().endswith(".xml"):
 				loadSkin(join(dirname(config.skin.primary_skin.value), file), scope=SCOPE_CONFIG, desktop=getDesktop(GUI_SKIN_ID), screenID=GUI_SKIN_ID)
-	
+
 	# Add an optional skin related user skin "user_skin_<SkinName>.xml".  If there is
 	# not a skin related user skin then try to add am optional generic user skin.
 	result = None
