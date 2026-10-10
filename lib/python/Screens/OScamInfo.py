@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # PYTHON IMPORTS
+import subprocess
 from datetime import datetime, timezone, timedelta
 from json import loads
 from os.path import exists
 from re import compile
-from twisted.internet.reactor import callInThread
+from twisted.internet.reactor import callInThread, callFromThread
 from ssl import create_default_context, _create_unverified_context as SkipCertificateVerification
 from urllib.parse import unquote
 from urllib.request import build_opener, HTTPDigestAuthHandler, HTTPHandler, HTTPSHandler, HTTPPasswordMgrWithDefaultRealm, Request
@@ -12,7 +13,7 @@ from time import time
 from pathlib import Path
 from xml.etree.ElementTree import XML, ParseError
 from ipaddress import ip_address
-from socket import getaddrinfo, gaierror
+from socket import getaddrinfo, gaierror, gethostname
 
 # ENIGMA IMPORTS
 from enigma import eTimer
@@ -22,6 +23,7 @@ from Components.config import config
 from Components.ScrollLabel import ScrollLabel
 from Components.Sources.List import List
 from Components.Sources.StaticText import StaticText
+from Components.About import GetIPsFromNetworkInterfaces
 from Components.SystemInfo import BoxInfo
 from Components.Pixmap import Pixmap
 from Screens.MessageBox import MessageBox
@@ -32,6 +34,36 @@ from Tools.Directories import fileExists, resolveFilename, SCOPE_CURRENT_SKIN
 
 # GLOBALS
 MODULE_NAME = __name__.split(".")[-1]
+
+
+def isLoopback(host):
+	if host == "localhost":
+		return True
+	try:
+		return ip_address(host).is_loopback
+	except ValueError:
+		return False
+
+
+def isLocalHost(host):
+	if isLoopback(host):
+		return True
+	if host.lower() == gethostname().lower():
+		return True
+	try:
+		targetIPs = {info[4][0] for info in getaddrinfo(host, None)}
+	except gaierror:
+		return False
+	localIPs = {"127.0.0.1", "::1"}
+	try:
+		localIPs |= {ip for _, ip in GetIPsFromNetworkInterfaces()}
+	except OSError:
+		pass
+	return bool(targetIPs & localIPs)
+
+
+def camDisplayName(text):
+	return "NCam" if "ncam" in (text or "").lower() else "OSCam"
 
 
 class OSCamGlobals():
@@ -55,18 +87,18 @@ class OSCamGlobals():
 		cam = cam if fileExists("/tmp/.ncam/ncam.version") else "oscam"
 		verfilename = f"{cam}.version"
 		api = f"{cam}{api}"
-		if config.oscaminfo.userDataFromConf.value:
+		if config.oscaminfo.userDataFromConf.value:  # Find and parse running oscam, ncam (auto)
 			verfile = f"/tmp/.{verfilename.split('.')[0]}/{verfilename}"
 			if exists(verfile):
 				data = Path(verfile).read_text()
-		else:
+		else:  # Find and parse running oscam, ncam (api)
 			webifok, url, result = self.callApi(proto="https" if config.oscaminfo.usessl.value else "http",
 												ip=str(config.oscaminfo.ip.value),
 												port=str(config.oscaminfo.port.value),
 												username=str(config.oscaminfo.username.value),
 												password=str(config.oscaminfo.password.value),
 												api=api, fmt="html", part="files", label=verfilename)
-			result = result.decode(encoding="latin-1", errors="ignore")
+			result = result.decode("UTF-8", "ignore")
 			if webifok:
 				try:
 					xml = XML(result).find("file")
@@ -106,7 +138,7 @@ class OSCamGlobals():
 			ip, proto, blocked = "127.0.0.1", "http", False
 			user = pwd = None
 			conffile = f"{conffile or 'oscam.conf'}"
-			ret = _("OSCam webif disabled") if not error else error
+			ret = _("%s webif disabled") % camDisplayName(api) if not error else error
 			if webif and port is not None:
 				if config.oscaminfo.userDataFromConf.value:
 					if conffile is not None and exists(conffile):
@@ -171,7 +203,18 @@ class OSCamGlobals():
 			else:
 				errmsg = str(error)
 			print(f"[{MODULE_NAME}] ERROR in module 'callApi': Unexpected error accessing WebIF: {errmsg}")
-			return False, url, errmsg.encode(encoding="latin-1", errors="ignore")
+			return False, url, errmsg.encode("UTF-8", "ignore")
+
+	def parseTimestamp(self, value):
+		if not value:
+			return None
+		try:
+			return datetime.fromisoformat(value)
+		except ValueError:
+			try:
+				return datetime.strptime(value, "%d.%m.%YT%H:%M:%S%z")
+			except ValueError:
+				return None
 
 	def getCapabilities(self):
 		if hasattr(self.confPath.__func__, "_content") and self.confPath.__func__._content:
@@ -184,7 +227,7 @@ class OSCamGlobals():
 
 	def updateLog(self):
 		webifok, api, url, signstatus, result = self.openWebIF(log=True)
-		ret, result = False, result.decode(encoding="latin-1", errors="ignore")
+		ret, result = False, result.decode("UTF-8", "ignore")
 		if webifok:
 			try:
 				xml = XML(result).find("log")
@@ -224,18 +267,18 @@ class OSCamInfo(Screen, OSCamGlobals):
 			<eLabel text="Status" position="1695,172" size="210,36" font="Regular;27" halign="center" valign="center" foregroundColor="white" backgroundColor="#105a5a5a" />
 			<widget source="outlist" render="Listbox" position="15,210" size="1890,600" backgroundColor="#10b3b3b3" enableWrapAround="1" scrollbarMode="showOnDemand" >
 				<convert type="TemplatedMultiContent">
-					{"template": [
-					MultiContentEntryText(pos=(0,0), size=(23,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),
-					MultiContentEntryText(pos=(25,0), size=(173,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),
-					MultiContentEntryText(pos=(200,0), size=(88,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=3),
-					MultiContentEntryText(pos=(290,0), size=(168,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=4),
-					MultiContentEntryText(pos=(460,0), size=(88,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=5),
-					MultiContentEntryText(pos=(550,0), size=(223,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=6),
-					MultiContentEntryText(pos=(775,0), size=(268,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),
-					MultiContentEntryText(pos=(1045,0), size=(233,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8),
-					MultiContentEntryText(pos=(1280,0), size=(233,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=9),
-					MultiContentEntryText(pos=(1515,0), size=(163,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=10),
-					MultiContentEntryText(pos=(1680,0), size=(210,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=11)
+					{"template": [  # index 0 is backgroundcolor
+					MultiContentEntryText(pos=(0,0), size=(23,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),  # type
+					MultiContentEntryText(pos=(25,0), size=(173,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),  # Reader/User
+					MultiContentEntryText(pos=(200,0), size=(88,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=3),  # AU
+					MultiContentEntryText(pos=(290,0), size=(168,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=4),  # Adress
+					MultiContentEntryText(pos=(460,0), size=(88,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=5),  # Port
+					MultiContentEntryText(pos=(550,0), size=(223,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=6),  # Protocol
+					MultiContentEntryText(pos=(775,0), size=(268,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),  # srvid:caid@provid
+					MultiContentEntryText(pos=(1045,0), size=(233,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8),  # Last Channel
+					MultiContentEntryText(pos=(1280,0), size=(233,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=9),  # LB Value/Reader
+					MultiContentEntryText(pos=(1515,0), size=(163,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=10),  # Online+Idle
+					MultiContentEntryText(pos=(1680,0), size=(210,75), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=11)  # Status
 					], "fonts": [gFont("Regular",27)], "itemHeight":75
 					}
 				</convert>
@@ -255,7 +298,7 @@ class OSCamInfo(Screen, OSCamGlobals):
 			<eLabel name="blue" position="920,1010" size="10,65" backgroundColor="blue" zPosition="1" />
 			<widget source="key_red" render="Label" position="40,1020" size="380,42" font="Regular;30" halign="left" valign="center" foregroundColor="#00ffffff" />
 			<widget source="key_green" render="Label" position="340,1020" size="380,42" font="Regular;30" halign="left" valign="center" foregroundColor="#00ffffff" />
-			<widget source="key_yellow" render="Label" position="640,1020" size="380,42" font="Regular;30" halign="left" valign="center" foregroundColor="00ffffff" />
+			<widget source="key_yellow" render="Label" position="640,1020" size="380,42" font="Regular;30" halign="left" valign="center" foregroundColor="#00ffffff" />
 			<widget source="key_blue" render="Label" position="940,1020" size="380,42" font="Regular;30" halign="left" valign="center" foregroundColor="#00ffffff" />
 			<widget source="key_OK" render="Label" position="1185,1020" size="60,42" font="Regular;30" halign="center" valign="center" foregroundColor="#00000000" backgroundColor="#00ffffff">
 				<convert type="ConditionalShowHide" />
@@ -272,9 +315,14 @@ class OSCamInfo(Screen, OSCamGlobals):
 		Screen.__init__(self, session)
 		self.skinName = "OSCamInfo"
 		webifok, api, url, signstatus, result = self.openWebIF()
-		camname = {"oscamapi": ("OSCam"), "ncamapi": ("NCam")}.get(api)
-		self.setTitle(_("%sInfo: Information") % camname)
+		self.camName = camDisplayName(api)
+		self.setTitle(_("%sInfo: Information") % self.camName)
 		self.rulist = []
+		self.lastWebifOk = False
+		self.isLocal = False
+		self._isLocalKey = None
+		self._fetchInProgress = False
+		self._failCount = 0
 		self["logo"] = Pixmap()
 		self["buildinfos"] = StaticText()
 		self["extrainfos"] = StaticText()
@@ -288,8 +336,8 @@ class OSCamInfo(Screen, OSCamGlobals):
 		self["camname"] = StaticText()
 		self["virtuell"] = StaticText()
 		self["resident"] = StaticText()
-		self["key_red"] = StaticText(_("Shutdown %s") % camname)
-		self["key_green"] = StaticText(_("Restart %s") % camname)
+		self["key_red"] = StaticText(_("Shutdown %s") % self.camName)
+		self["key_green"] = StaticText(_("Restart %s") % self.camName)
 		self["key_yellow"] = StaticText(_("Show Capabilities"))
 		self["key_blue"] = StaticText(_("Show Log"))
 		self["key_OK"] = StaticText()
@@ -300,13 +348,15 @@ class OSCamInfo(Screen, OSCamGlobals):
 			"ok": (self.keyOk, _("Show details")),
 			"cancel": (self.exit, _("Close the screen")),
 			"menu": (self.keyMenu, _("Open Settings")),
-			"red": (self.keyShutdown, _("Shutdown %s") % camname),
-			"green": (self.keyRestart, _("Restart %s") % camname),
+			"red": (self.keyShutdown, _("Shutdown %s") % self.camName),
+			"green": (self.keyRestart, _("Restart %s") % self.camName),
 			"yellow": (self.keyInfo, _("Open Capability")),
 			"blue": (self.keyBlue, _("Open Log"))
-			}, prio=1, description=_("%sInfo Actions") % camname)
+			}, prio=1, description=_("%sInfo Actions") % self.camName)
 		self.loop = eTimer()
 		self.loop.callback.append(self._triggerDataUpdate)
+		self.actionRefreshTimer = eTimer()
+		self.actionRefreshTimer.callback.append(self._triggerDataUpdate)
 		self.onLayoutFinish.append(self.onLayoutFinished)
 		self.bgColors = parameters.get("OSCamInfoBGcolors", (0x10fcfce1, 0x10f1f6e6, 0x10e2e0ef))
 
@@ -316,8 +366,6 @@ class OSCamInfo(Screen, OSCamGlobals):
 		else:
 			Logo = resolveFilename(SCOPE_CURRENT_SKIN, "icons/OscamLogo.png")
 		self["logo"].instance.setPixmapFromFile(Logo)
-		webifok, api, url, signstatus, result = self.openWebIF()
-		tag = {"oscamapi": ("oscam"), "ncamapi": ("ncam")}.get(api)
 		self.showHideKeyOk()
 		self["outlist"].onSelectionChanged.append(self.showHideKeyOk)
 		if config.oscaminfo.userDataFromConf.value:
@@ -329,7 +377,7 @@ class OSCamInfo(Screen, OSCamGlobals):
 
 	def _checkConfPath(self):
 		confPathResult = self.confPath()[0]
-		self._onConfPathChecked(confPathResult)
+		callFromThread(self._onConfPathChecked, confPathResult)
 
 	def _onConfPathChecked(self, confPathResult):
 		if confPathResult is None:
@@ -342,25 +390,59 @@ class OSCamInfo(Screen, OSCamGlobals):
 	def _triggerDataUpdate(self):
 		callInThread(self._fetchOScamData)
 
+	def _updateIsLocal(self):
+		key = (bool(config.oscaminfo.userDataFromConf.value), str(config.oscaminfo.ip.value))
+		if key != self._isLocalKey:
+			self._isLocalKey = key
+			self.isLocal = key[0] or isLocalHost(key[1])
+
 	def _fetchOScamData(self):
-		webifok, api, url, signstatus, result = self.openWebIF()
-		self._updateMainUI(webifok, api, url, signstatus, result)
+		if self._fetchInProgress:
+			return
+		self._fetchInProgress = True
+		try:
+			self._updateIsLocal()
+			webifok, api, url, signstatus, result = self.openWebIF()
+			self.lastWebifOk = webifok
+			if webifok:
+				self._failCount = 0
+			else:
+				self._failCount += 1
+				if self._failCount >= 5:
+					self.loop.stop()
+					print(f"[{MODULE_NAME}] WebIF unreachable 5 times, stopping auto-update")
+			callFromThread(self._updateMainUI, webifok, api, url, signstatus, result)
+			callFromThread(self.updateKeyLabels)
+		finally:
+			self._fetchInProgress = False
+
+	def updateKeyLabels(self):
+		self["key_red"].setText(_("Shutdown %s") % self.camName if self.lastWebifOk else "")
+		if self.lastWebifOk:
+			self["key_green"].setText(_("Restart %s") % self.camName)
+		elif self.isLocal:
+			self["key_green"].setText(_("Start %s") % self.camName)
+		else:
+			self["key_green"].setText("")
 
 	def _updateMainUI(self, webifok, api, url, signstatus, result):
 		ctime = datetime.fromisoformat(datetime.now(timezone.utc).astimezone().isoformat())
 		currtime = "Protocol Time: %s - %s" % (ctime.strftime("%x"), ctime.strftime("%X"))
 		na = _("n/a")
 		tag, camname = {"oscamapi": ("oscam", "OSCam"), "ncamapi": ("ncam", "NCam"), None: (na, na)}.get(api)
+		if camname != na:
+			self.camName = camname
 		if webifok and result:
 			try:
 				json_data = loads(result)
 				json = json_data.get(tag, {})
 			except Exception as e:
-				print(f"[{MODULE_NAME}] JSON decode error: {e}")
+				print(f"[{MODULE_NAME}] JSON decode error in _updateMainUI: {e}")
 				json = {}
 			sysinfo = json.get("sysinfo", {})
 			stime_iso = json.get("starttime", None)
-			starttime = "Start Time: %s - %s" % (datetime.fromisoformat(stime_iso).strftime("%x"), datetime.fromisoformat(stime_iso).strftime("%X")) if stime_iso else (na, na)
+			stime_dt = self.parseTimestamp(stime_iso)
+			starttime = "Start Time: %s - %s" % (stime_dt.strftime("%x"), stime_dt.strftime("%X")) if stime_dt else (na, na)
 			runtime = "%s Run Time: %s" % (camname, json.get("runtime", na))
 			version = "%s: %s" % (camname, json.get("version", na))
 			srvidfile = "srvidfile: %s" % json.get("srvidfile", na)
@@ -384,7 +466,8 @@ class OSCamInfo(Screen, OSCamGlobals):
 				ecmtime = request.get("ecmtime", na)
 				lbvaluereader = "%s (%s ms)" % (answered, ecmtime) if answered and ecmtime else request.get("lbvalue", na)
 				login_iso = times.get("login")
-				loginfmt = datetime.fromisoformat(login_iso).strftime("%X").replace(" days", "d").replace(" day", "d") if login_iso else na
+				login_dt = self.parseTimestamp(login_iso)
+				loginfmt = login_dt.strftime("%X").replace(" days", "d").replace(" day", "d") if login_dt else na
 				idle_iso = times.get("idle")
 				loginfmt += "\n%s" % self.strf_delta(timedelta(seconds=float(idle_iso)) if idle_iso else na)
 				status = connection.get("status", na)
@@ -418,14 +501,17 @@ class OSCamInfo(Screen, OSCamGlobals):
 			self["free"].setText("Free: %s" % sysinfo.get("mem_cur_free", na))
 			self["buffer"].setText("Buffer: %s" % sysinfo.get("mem_cur_buff", na))
 			self["camname"].setText("%s" % camname)
-			self["virtuell"].setText("Virtual memory: %s" % sysinfo.get("%s_vmsize" % tag, na))
-			self["resident"].setText("Resident Set: %s" % sysinfo.get("%s_rsssize" % tag, na))
+			self["virtuell"].setText("Virtual: %s" % sysinfo.get("%s_vmsize" % tag, na))
+			self["resident"].setText("Resident: %s" % sysinfo.get("%s_rsssize" % tag, na))
 			self["outlist"].updateList(outlist)
 			self.displayLog()
 		else:
-			self.loop.stop()
 			self["buildinfos"].setText(url)
-			self["extrainfos"].setText(_("Unexpected error accessing WebIF: %s") % result.decode(encoding="latin-1", errors="ignore"))
+			errtext = result.decode("UTF-8", "ignore")
+			if self.isLocal:
+				self["extrainfos"].setText(_("%s is currently stopped or unreachable. Press GREEN to start it.") % self.camName)
+			else:
+				self["extrainfos"].setText(_("Unexpected error accessing WebIF: %s") % errtext)
 			self["timerinfos"].setText(currtime)
 
 	def strf_delta(self, td):
@@ -437,7 +523,7 @@ class OSCamInfo(Screen, OSCamGlobals):
 	def displayLog(self):
 		def fetchLog():
 			logok, result = self.updateLog()
-			self._updateLogUI(logok, result)
+			callFromThread(self._updateLogUI, logok, result)
 		callInThread(fetchLog)
 
 	def _updateLogUI(self, logok, result):
@@ -445,12 +531,11 @@ class OSCamInfo(Screen, OSCamGlobals):
 			self["logtext"].setText(result)
 			self["logtext"].moveBottom()
 		else:
-			self.loop.stop()
 			self["extrainfos"].setText(_("Unexpected error accessing WebIF: %s") % result)
 
 	def showHideKeyOk(self):
 		idx = self["outlist"].getSelectedIndex()
-		if idx is not None and self.rulist and idx < len(self.rulist) and self.rulist[idx][2] > 0 and self.rulist[idx][0] in ["p", "r"]:
+		if idx is not None and self.rulist and 0 <= idx < len(self.rulist) and self.rulist[idx][2] > 0 and self.rulist[idx][0] in ["p", "r"]:
 			self["key_OK"].setText(_("OK"))
 			self["key_entitlements"].setText(_("Entitlements"))
 		else:
@@ -467,7 +552,7 @@ class OSCamInfo(Screen, OSCamGlobals):
 
 	def keyOk(self):
 		idx = self["outlist"].getSelectedIndex()
-		if idx is not None and self.rulist and idx < len(self.rulist) and self.rulist[idx][2] > 0 and self.rulist[idx][0] in ["p", "r"]:
+		if idx is not None and self.rulist and 0 <= idx < len(self.rulist) and self.rulist[idx][2] > 0 and self.rulist[idx][0] in ["p", "r"]:
 			self.loop.stop()
 			self.session.openWithCallback(self.keyCallback, OSCamEntitlements, self.rulist[idx][1])
 
@@ -475,14 +560,21 @@ class OSCamInfo(Screen, OSCamGlobals):
 		self.session.openWithCallback(self.menuCallback, OSCamInfoSetup)
 
 	def keyShutdown(self):
-		webifok, api, url, signstatus, result = self.openWebIF()
-		camname = {"oscamapi": ("OSCam"), "ncamapi": ("NCam")}.get(api)
-		self.session.openWithCallback(boundFunction(self.msgboxCB, "shutdown"), MessageBox, _("Do you really want to shut down %s?\n\nATTENTION: To reactivate %s, a complete receiver restart must be carried out!" % (camname, camname)), MessageBox.TYPE_YESNO, timeout=10, default=False)
+		if not self.lastWebifOk:
+			return
+		if self.isLocal:
+			msg = _("Do you really want to stop %s?") % self.camName
+		else:
+			msg = _("Do you really want to shut down %s?\n\nATTENTION: To reactivate %s, a complete receiver restart must be carried out!") % (self.camName, self.camName)
+		self.session.openWithCallback(boundFunction(self.msgboxCB, "shutdown"), MessageBox, msg, MessageBox.TYPE_YESNO, timeout=10, default=False)
 
 	def keyRestart(self):
-		webifok, api, url, signstatus, result = self.openWebIF()
-		camname = {"oscamapi": ("OSCam"), "ncamapi": ("NCam")}.get(api)
-		self.session.openWithCallback(boundFunction(self.msgboxCB, "restart"), MessageBox, _("Do you really want to restart %s?\n\nHINT: This will take about 5 seconds!" % camname), MessageBox.TYPE_YESNO, timeout=10, default=False)
+		if not self.lastWebifOk and not self.isLocal:
+			return
+		if not self.lastWebifOk:
+			self.session.openWithCallback(boundFunction(self.msgboxCB, "start"), MessageBox, _("%s is currently not running.\n\nDo you want to start it?") % self.camName, MessageBox.TYPE_YESNO, timeout=10, default=True)
+		else:
+			self.session.openWithCallback(boundFunction(self.msgboxCB, "restart"), MessageBox, _("Do you really want to restart %s?") % self.camName, MessageBox.TYPE_YESNO, timeout=10, default=False)
 
 	def keyInfo(self):
 		self.loop.stop()
@@ -492,21 +584,62 @@ class OSCamInfo(Screen, OSCamGlobals):
 		self.loop.stop()
 		self.session.openWithCallback(self.keyCallback, OSCamInfoLog)
 
+	def _afterAction(self, action, exitCode=None):
+		if exitCode:
+			messages = {
+				"start": _("Starting %s failed (exit code %s)"),
+				"stop": _("Stopping %s failed (exit code %s)"),
+				"restart": _("Restarting %s failed (exit code %s)"),
+			}
+			self._showActionError(messages.get(action, _("%s action failed (exit code %s)")) % (self.camName, exitCode))
+		self.actionRefreshTimer.start(3000, True)
+		self.updateKeyLabels()
+		if config.oscaminfo.autoUpdate.value:
+			self.loop.start(config.oscaminfo.autoUpdate.value * 1000, False)
+
+	def _localAction(self, action):
+		def runAction():
+			cmds = {
+				"start": ["/etc/init.d/softcam", "start"],
+				"stop": ["/etc/init.d/softcam", "stop"],
+				"restart": ["/etc/init.d/softcam", "restart"],
+			}
+			try:
+				proc = subprocess.Popen(cmds[action], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+				_, stderr = proc.communicate(timeout=30)
+				exitCode = proc.returncode
+				if exitCode != 0 and stderr:
+					print(f"[{MODULE_NAME}] softcam {action} returned {exitCode}: {stderr.decode('UTF-8', 'ignore')}")
+			except Exception as err:
+				print(f"[{MODULE_NAME}] ERROR in '_localAction' ({action}): {err}")
+				exitCode = 1
+			callFromThread(self._afterAction, action, exitCode)
+		callInThread(runAction)
+
+	def _remoteAction(self, action):
+		def doAction():
+			webifok, api, url, signstatus, result = self.openWebIF(part=action)
+			if not webifok:
+				callFromThread(self._showActionError, result)
+			callFromThread(self._afterAction, action)
+		callInThread(doAction)
+
 	def msgboxCB(self, action, answer):
 		if answer:
 			self.loop.stop()
-			def doAction():
-				webifok, api, url, signstatus, result = self.openWebIF(part=action)
-				if not webifok:
-					self._showActionError(result)
-			callInThread(doAction)
+			localAction = {"shutdown": "stop", "restart": "restart", "start": "start"}[action]
+			if self.isLocal:
+				self._localAction(localAction)
+			else:
+				self._remoteAction(action)
 
 	def _showActionError(self, result):
 		print("[%s] ERROR in module 'msgboxCB': %s" % (MODULE_NAME, "Unexpected error accessing WebIF: %s" % result))
-		self.session.open(MessageBox, _("Unexpected error accessing WebIF: %s" % result), MessageBox.TYPE_ERROR, timeout=3, close_on_any_key=True)
+		self.session.open(MessageBox, _("Unexpected error accessing WebIF: %s") % result, MessageBox.TYPE_ERROR, timeout=3, close_on_any_key=True)
 
 	def exit(self):
 		self.loop.stop()
+		self.actionRefreshTimer.stop()
 		self.close()
 
 
@@ -557,34 +690,34 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 			</parameters>
 			<widget source="entitleslist" render="Listbox" position="15,165" size="1890,828" backgroundColor="#10b3b3b3" enableWrapAround="1" scrollbarMode="showOnDemand" >
 				<convert type="TemplatedMultiContent">
-					{"templates":
+					{"templates":  # index 0 is backgroundcolor
 						{	"default": (36, [
-							MultiContentEntryText(pos=(0,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),
-							MultiContentEntryText(pos=(90,0), size=(103,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),
-							MultiContentEntryText(pos=(195,0), size=(118,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=3),
-							MultiContentEntryText(pos=(315,0), size=(268,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=4),
-							MultiContentEntryText(pos=(585,0), size=(148,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=5),
-							MultiContentEntryText(pos=(735,0), size=(163,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=6),
-							MultiContentEntryText(pos=(900,0), size=(163,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),
-							MultiContentEntryText(pos=(1065,0), size=(825,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8)
+							MultiContentEntryText(pos=(0,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),  # Type
+							MultiContentEntryText(pos=(90,0), size=(103,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),  # CAID
+							MultiContentEntryText(pos=(195,0), size=(118,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=3),  # Provid
+							MultiContentEntryText(pos=(315,0), size=(268,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=4),  # ID
+							MultiContentEntryText(pos=(585,0), size=(148,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=5),  # Class
+							MultiContentEntryText(pos=(735,0), size=(163,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=6),  # Start Date
+							MultiContentEntryText(pos=(900,0), size=(163,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),  # Expire Date
+							MultiContentEntryText(pos=(1065,0), size=(825,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8)  # Name
 							]),
-							"entitlements": (36, [
-							MultiContentEntryText(pos=(0,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),
-							MultiContentEntryText(pos=(90,0), size=(208,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),
-							MultiContentEntryText(pos=(300,0), size=(118,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_ELLIPSIS, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),
-							MultiContentEntryText(pos=(420,0), size=(313,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_ELLIPSIS, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8),
-							MultiContentEntryText(pos=(735,0), size=(268,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_ELLIPSIS, color=0x000000, backcolor=MultiContentTemplateColor(0), text=9),
-							MultiContentEntryText(pos=(1005,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=10),
-							MultiContentEntryText(pos=(1095,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=11),
-							MultiContentEntryText(pos=(1185,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=12),
-							MultiContentEntryText(pos=(1260,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=13),
-							MultiContentEntryText(pos=(1335,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=14),
-							MultiContentEntryText(pos=(1410,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=15),
-							MultiContentEntryText(pos=(1485,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=16),
-							MultiContentEntryText(pos=(1560,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=17),
-							MultiContentEntryText(pos=(1635,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=18),
-							MultiContentEntryText(pos=(1710,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=19),
-							MultiContentEntryText(pos=(1785,0), size=(105,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=20)
+							"entitlements": (36, [  # index 3 to 6 (Reshare, Hop, ShareID, RemoteID) are not used here
+							MultiContentEntryText(pos=(0,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=1),  # Caid
+							MultiContentEntryText(pos=(90,0), size=(208,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=2),  # System
+							MultiContentEntryText(pos=(300,0), size=(118,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=7),  # ProvIDs
+							MultiContentEntryText(pos=(420,0), size=(313,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=8),  # Providers
+							MultiContentEntryText(pos=(735,0), size=(268,36), font=0, flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_WRAP, color=0x000000, backcolor=MultiContentTemplateColor(0), text=9),  # Nodes
+							MultiContentEntryText(pos=(1005,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=10),  # Locals
+							MultiContentEntryText(pos=(1095,0), size=(88,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=11),  # Count
+							MultiContentEntryText(pos=(1185,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=12),  # Hop1
+							MultiContentEntryText(pos=(1260,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=13),  # Hop2
+							MultiContentEntryText(pos=(1335,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=14),  # Hopx
+							MultiContentEntryText(pos=(1410,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=15),  # Curr
+							MultiContentEntryText(pos=(1485,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=16),  # Res0
+							MultiContentEntryText(pos=(1560,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=17),  # Res1
+							MultiContentEntryText(pos=(1635,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=18),  # Res2
+							MultiContentEntryText(pos=(1710,0), size=(73,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=19),  # Resx
+							MultiContentEntryText(pos=(1785,0), size=(105,36), font=0, flags=RT_HALIGN_CENTER|RT_VALIGN_CENTER, color=0x000000, backcolor=MultiContentTemplateColor(0), text=20)  # Reshare
 							])
 						},
 						"fonts": [gFont("Regular",27)], "itemHeight":36
@@ -618,6 +751,7 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 		self.showall = False
 		self.externalreader = False
 		self.entitleslist = []
+		self.clients = []
 		for idx in range(len(self.dheaders)):
 			self["dheader%s" % idx] = StaticText()
 		for idx in range(len(self.cheaders)):
@@ -663,7 +797,7 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 		entitleslist = self.getJSONentitlements()
 		if not entitleslist:
 			entitleslist = self.getJSONstats()
-		self._updateEntitlementsUI(entitleslist)
+		callFromThread(self._updateEntitlementsUI, entitleslist)
 
 	def _updateEntitlementsUI(self, entitleslist):
 		webifok, api, url, signstatus, result = self.openWebIF()
@@ -692,8 +826,7 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 		tag = {"oscamapi": ("oscam"), "ncamapi": ("ncam")}.get(api)
 		if webifok and result:
 			try:
-				data = loads(result)
-				entitlements = data.get(tag, {}).get("entitlements", [])
+				entitlements = loads(result).get(tag, {}).get("entitlements", [])
 			except Exception as e:
 				print(f"[{MODULE_NAME}] JSON decode error in entitlements: {e}")
 				entitlements = []
@@ -720,8 +853,7 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 		tag = {"oscamapi": ("oscam"), "ncamapi": ("ncam")}.get(api)
 		if webifok and result:
 			try:
-				data = loads(result)
-				self.clients = data.get(tag, {}).get("status", {}).get("client", [])
+				self.clients = loads(result).get(tag, {}).get("status", {}).get("client", [])
 			except Exception as e:
 				print(f"[{MODULE_NAME}] JSON decode error in stats: {e}")
 				self.clients = []
@@ -783,7 +915,7 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 								nodelist.append(node.text)
 					ntext = ", ".join(nodelist)
 					hoplist = []
-					for client in getattr(self, 'clients', []):
+					for client in getattr(self, "clients", []):
 						if client.get("request", {}).get("caid", "") == caid:
 							for entitle in client.get("connection", {}).get("entitlements", []):
 								for key in ["locals", "cccount", "ccchop1", "ccchop2", "ccchopx", "ccccurr", "cccres0", "cccres1", "cccres2", "cccresx", "cccreshare"]:
@@ -845,9 +977,9 @@ class OSCamEntitlements(Screen, OSCamGlobals):
 			self.loop.start(config.oscaminfo.autoUpdate.value * 1000, False)
 
 	def keyOk(self):
-		selected_index = self["entitleslist"].getSelectedIndex()
-		if selected_index is not None and self.entitleslist and 0 <= selected_index < len(self.entitleslist):
-			entitlement = self.entitleslist[selected_index]
+		idx = self["entitleslist"].getSelectedIndex()
+		if idx is not None and self.entitleslist and 0 <= idx < len(self.entitleslist):
+			entitlement = self.entitleslist[idx]
 			if self.externalreader:
 				self.loop.stop()
 				self.session.openWithCallback(self.keyCallback, OSCamEntitleDetails, entitlement)
@@ -910,8 +1042,11 @@ class OSCamEntitleDetails(Screen, OSCamGlobals):
 			if (idx + 1) < entitlelen:
 				self["label%s" % idx] = StaticText(entitlement[idx + 1])
 		self["ProvIDlist"] = List((splitParts(entitlement[7].split(", "), 6)) if entitlelen else _("n/a"))
+		self['ProvIDlist'].selectionEnabled(0)
 		self["Providerlist"] = List((splitParts(entitlement[8].split(", "), 2)) if entitlelen else _("n/a"))
+		self['Providerlist'].selectionEnabled(0)
 		self["Nodelist"] = List((splitParts(entitlement[9].split(", "), 2)) if entitlelen else _("n/a"))
+		self['Nodelist'].selectionEnabled(0)
 		self["key_exit"] = StaticText(_("Exit"))
 		self["actions"] = HelpableActionMap(self, ["OkCancelActions"], {
 			"ok": (self.close, _("Close the screen")),
@@ -941,7 +1076,9 @@ class OSCamInfoCapability(Screen, OSCamGlobals):
 	def __init__(self, session):
 		Screen.__init__(self, session)
 		self.skinName = "OSCamInfoCapability"
-		self.setTitle(_("OSCamInfo: Capabilities"))
+		webifok, api, url, signstatus, result = self.openWebIF()
+		self.camName = camDisplayName(api)
+		self.setTitle(_("%sInfo: Capabilities") % self.camName)
 		self["captext"] = ScrollLabel(_("<no capabilities found>"))
 		self["actions"] = HelpableActionMap(self, ["NavigationActions", "OkCancelActions"], {
 			"ok": (self.exit, _("Close the screen")),
@@ -1012,7 +1149,7 @@ class OSCamInfoLog(Screen, OSCamGlobals):
 	def _triggerLogUpdate(self):
 		def fetchLog():
 			logok, result = self.updateLog()
-			self._updateLogUI(logok, result)
+			callFromThread(self._updateLogUI, logok, result)
 		callInThread(fetchLog)
 
 	def _updateLogUI(self, logok, result):
