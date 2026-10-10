@@ -42,4 +42,11 @@ public:
 	void presentPixmap(int page) override;
 	void copyPageContent(int from, int to) override;
 	void cleanup() override;
+
+	// Diagnostic only (ENIGMA_EGL_DEBUG_SWATCH=1) - see the definition's
+	// comment. Called by gEGLDC::initEGL() once, after the EGL context is
+	// current, to settle the R/B scanout question empirically instead of by
+	// guessing. Delete both the method and the call site once the answer is
+	// known; it is not meant to ship enabled.
+	void debugSwatch();
 };

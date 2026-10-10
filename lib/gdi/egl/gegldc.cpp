@@ -13,6 +13,10 @@
 #include <lib/gdi/fb.h>
 #include <lib/gdi/font.h>
 
+#ifdef HAVE_DREAMBOX_EGL
+#include <lib/gdi/egl/platform/dreambox/dreambox_window_provider.h>
+#endif
+
 #ifndef EGL_OPENGL_ES3_BIT_KHR
 #define EGL_OPENGL_ES3_BIT_KHR 0x00000040
 #endif
@@ -407,6 +411,18 @@ bool gEGLDC::initEGL() {
 	eDebug("[gEGLDC] vertex data via %s", gles::clientArrays ? "client-side arrays" : "buffer uploads");
 	gles::needsRBSwap = m_window_provider->needsRenderTargetRBSwap();
 	eDebug("[gEGLDC] GLES%d context created. needsRBSwap=%d", m_gles_version, gles::needsRBSwap ? 1 : 0);
+
+	// Diagnostic only (ENIGMA_EGL_DEBUG_SWATCH=1): settle the R/B scanout
+	// question empirically - see DreamboxWindowProvider::debugSwatch(). Runs
+	// before shader init so it can't be confused by shader state, and after
+	// eglMakeCurrent() (above, in tryInitEGL()) so a real surface is current.
+#ifdef HAVE_DREAMBOX_EGL
+	if (m_window_provider && m_window_provider->usesPixmapSurface()) {
+		DreamboxWindowProvider* dbg = dynamic_cast<DreamboxWindowProvider*>(m_window_provider);
+		if (dbg)
+			dbg->debugSwatch();
+	}
+#endif
 
 	m_texture_manager.setDisplay(m_egl_display);
 

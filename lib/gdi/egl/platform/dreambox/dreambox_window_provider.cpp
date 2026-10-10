@@ -2,6 +2,10 @@
 #include <lib/gdi/egl/platform/dreambox/dreambox_window_provider.h>
 #include <lib/gdi/fb.h>
 
+#include <cstring>
+#include <cstdlib>
+#include <cstdint>
+
 #ifdef HAVE_GLES3
 #include <GLES3/gl3.h>
 #else
@@ -91,6 +95,73 @@ bool DreamboxWindowProvider::init(int width, int height) {
 
 	eDebug("[DreamboxWindowProvider] init %dx%d pitch=%u pages=%d phys=0x%lx", width, height, m_pixmaps[0].pitch, m_page_count, (unsigned long)m_pixmaps[0].mem.phys);
 	return true;
+}
+
+// Diagnostic one-shot: draw a known (1,0,0,1) quad into the first page
+// through the SAME shader path the real renderer uses, read it back with
+// glReadPixels, and log what the framebuffer actually contains. This is the
+// only way to tell whether this SoC's scanout really swaps R/B from what GL
+// writes (the hypothesis behind needsRenderTargetRBSwap() == true and the
+// per-shader mix(c, c.bgra, u_rbswap) compensation), or whether that
+// compensation is what's actually CAUSING a swap that shouldn't exist.
+//
+// Called by gEGLDC::initEGL() (see gles_version.h's needsRBSwap comment) so
+// the EGL context/surface are already current when this runs. Requires an
+// EGL surface for page 0 to be bound as the draw target; if not, does
+// nothing and returns. Logs (never throws, never asserts): this is
+// diagnostic-only, gated by ENIGMA_EGL_DEBUG_SWATCH=1.
+//
+// Interpretation of the log line:
+//   "readback R=255 G=0 B=0"  -> scanout does NOT swap. Set
+//                                needsRenderTargetRBSwap() to false, and
+//                                change gtexture_manager.cpp back to
+//                                GL_BGRA_EXT. The per-shader swap should
+//                                then stay (it makes the *output* R=255
+//                                reach scanout as R, given a non-swapping
+//                                scanout) - i.e. the shaders were right,
+//                                the provider override was wrong.
+//   "readback R=0 G=0 B=255"  -> scanout DOES swap. Keep the provider
+//                                override true, and REMOVE the per-shader
+//                                mix(c, c.bgra, u_rbswap) compensation
+//                                (currently double-swapping on top of the
+//                                provider's own compensation for textured
+//                                draws - see the review notes).
+//
+// Run once on the box, read the log, then delete this whole method and its
+// call site - it is not meant to ship enabled.
+void DreamboxWindowProvider::debugSwatch() {
+	if (!getenv("ENIGMA_EGL_DEBUG_SWATCH"))
+		return;
+
+	// A known-value draw through the *simplest* possible path: no shader,
+	// no texture, no blend, no projection matrix - glClear() the page to
+	// solid red, then read one pixel back.
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glDisable(GL_SCISSOR_TEST);
+	glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glFinish();
+
+	uint8_t px[4] = {0, 0, 0, 0};
+	glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	const GLenum err = glGetError();
+
+	eDebug("[DreamboxWindowProvider] DEBUG SWATCH: wrote (R=255,G=0,B=0) via glClearColor+glClear, "
+	       "readback R=%u G=%u B=%u A=%u glError=0x%x",
+	       px[0], px[1], px[2], px[3], (unsigned)err);
+
+	if (err == GL_NO_ERROR) {
+		if (px[0] > 200 && px[2] < 50) {
+			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: scanout does NOT swap R/B "
+			       "-> set needsRenderTargetRBSwap() to false and revert gtexture_manager.cpp to GL_BGRA_EXT");
+		} else if (px[2] > 200 && px[0] < 50) {
+			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: scanout DOES swap R/B "
+			       "-> keep needsRenderTargetRBSwap() true and remove the per-shader u_rbswap compensation");
+		} else {
+			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: inconclusive (readback not pure red or blue) "
+			       "- try again after a real frame has been drawn, or check whether GL_RGBA is supported for glReadPixels on this driver");
+		}
+	}
 }
 
 EGLNativeDisplayType DreamboxWindowProvider::getNativeDisplay() {
