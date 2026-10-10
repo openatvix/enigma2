@@ -130,8 +130,8 @@ bool DreamboxWindowProvider::init(int width, int height) {
 // Run once on the box, read the log, then delete this whole method and its
 // call site - it is not meant to ship enabled.
 void DreamboxWindowProvider::debugSwatch() {
-	if (!getenv("ENIGMA_EGL_DEBUG_SWATCH"))
-		return;
+	// TEMPORARY: unconditional for one diagnostic build - revert to
+	// getenv("ENIGMA_EGL_DEBUG_SWATCH") before committing.
 
 	// A known-value draw through the *simplest* possible path: no shader,
 	// no texture, no blend, no projection matrix - glClear() the page to
