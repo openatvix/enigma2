@@ -45,6 +45,12 @@ public:
 
 	unsigned long getPhysAddr() { return m_phys_mem; }
 
+	// Pans the framebuffer's visible window. `off` is in SCANLINES, not
+	// bytes: it goes straight into fb_var_screeninfo.yoffset for
+	// FBIOPAN_DISPLAY (see fb.cpp), and the kernel converts to a byte
+	// offset internally. DreamboxWindowProvider::presentPixmap() relies on
+	// this - page N's scanout line offset is N * height (not N *
+	// Stride()*height).
 	int setOffset(int off);
 	int waitVSync();
 	void blit();

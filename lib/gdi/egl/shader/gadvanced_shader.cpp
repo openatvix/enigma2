@@ -87,8 +87,16 @@ static const char* fragment_shader_es3 = R"(#version 300 es
                 }
             }
 
-            if (t > u_gradient_stops[u_num_stops - 1]) {
-                grad_color = u_gradient_colors[u_num_stops - 1];
+            // GLSL ES 3.00 tightens the ES 2.00 rule, not loosens it: some
+            // drivers (including Broadcom's V3D family, and the same class
+            // of restriction already worked around in the ES2 shader below)
+            // reject a runtime uniform used as an array index here. Find the
+            // last stop with a loop index instead, which is a
+            // constant-index-expression.
+            for (int i = 0; i < 16; i++) {
+                if (i == u_num_stops - 1 && t > u_gradient_stops[i]) {
+                    grad_color = u_gradient_colors[i];
+                }
             }
 
             if (u_alphablend == 1) {

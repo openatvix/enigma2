@@ -12,19 +12,13 @@
 #include <GLES2/gl2.h>
 #endif
 
-// drm/drm_fourcc.h's DRM_FORMAT_ABGR8888. A diagnostic pass (comparing
-// known-good source-image RGB values against the bytes actually handed to
-// glTexImage2D/glTexSubImage2D for both text and picon uploads) proved the
-// GPU texture pipeline puts the right byte in the right place every time -
-// so the visible R/B swap users saw was never in texture uploads at all.
-// This is the one remaining untested link: it tells the vendor's native-
-// pixmap EGL surface how to interpret the live scanout framebuffer memory
-// that GL renders directly into and the display controller reads from.
-// ARGB8888 (memory order B,G,R,A) matched gTextureManager's own BGRA
-// assumption for enigma2 surfaces, but that's a fact about *enigma2's* CPU
-// pixmaps, not about what this SoC's display plane actually expects -
-// several Broadcom-based STB graphics stacks are known to swap R/B in their
-// hardware compositor's native order. Try ABGR8888 (memory order R,G,B,A).
+// drm/drm_fourcc.h's DRM_FORMAT_ABGR8888. A ground-truth swatch on DM920
+// (see debugSwatch()) proved this SoC's scanout reads GL's output with no
+// R/B swap, so the format token is descriptive only: the vendor EGL driver
+// doesn't use it to reorder bytes, and the correct upload format for the
+// same pixmaps on the GL side is GL_BGRA_EXT (see gles::needsRBSwap's
+// comment in gles_version.h). Any residual "wrong colour" reports on this
+// box are on the shader/upload side, not this field.
 #define DRM_FORMAT_ABGR8888 0x34324241
 
 DreamboxWindowProvider::DreamboxWindowProvider() : m_page_count(1), m_height(0), m_page_bytes(0) {
@@ -79,6 +73,13 @@ bool DreamboxWindowProvider::init(int width, int height) {
 		m_pixmaps[i].mem.length = m_page_bytes;
 		m_pixmaps[i].mem.offset = 0;
 		m_pixmaps[i].mem.fd = -1; // no separate fd: addr is already mapped below
+		// Both base addresses assume the whole multi-page framebuffer was
+		// allocated as one physically contiguous region - which it is on
+		// this platform (fbClass::SetMode() requests yres_virtual =
+		// nyRes * 3 in a single FBIOPUT_VSCREENINFO call, and the kernel
+		// serves that as one smem allocation). `phys` is page-0-relative
+		// plus i * m_page_bytes only for that reason; `addr` similarly
+		// walks the single mmap'd region returned by fb->lfb.
 		m_pixmaps[i].mem.phys = (uintptr_t)fb->getPhysAddr() + (uintptr_t)i * m_page_bytes;
 		m_pixmaps[i].mem.addr = fb->lfb + (size_t)i * m_page_bytes;
 
@@ -97,41 +98,25 @@ bool DreamboxWindowProvider::init(int width, int height) {
 	return true;
 }
 
-// Diagnostic one-shot: draw a known (1,0,0,1) quad into the first page
-// through the SAME shader path the real renderer uses, read it back with
-// glReadPixels, and log what the framebuffer actually contains. This is the
-// only way to tell whether this SoC's scanout really swaps R/B from what GL
-// writes (the hypothesis behind needsRenderTargetRBSwap() == true and the
-// per-shader mix(c, c.bgra, u_rbswap) compensation), or whether that
-// compensation is what's actually CAUSING a swap that shouldn't exist.
+// Diagnostic one-shot: clear the first page to a known colour, read one
+// pixel back with glReadPixels, and log what the framebuffer actually
+// contains. This proves empirically whether this SoC's scanout swaps R/B
+// from what GL writes. Whatever it reports is exactly what
+// needsRenderTargetRBSwap() (above) should return - keep the two in sync.
 //
 // Called by gEGLDC::initEGL() (see gles_version.h's needsRBSwap comment) so
-// the EGL context/surface are already current when this runs. Requires an
-// EGL surface for page 0 to be bound as the draw target; if not, does
-// nothing and returns. Logs (never throws, never asserts): this is
-// diagnostic-only, gated by ENIGMA_EGL_DEBUG_SWATCH=1.
+// the EGL context/surface are already current when this runs. Logs (never
+// throws, never asserts): this is diagnostic-only, gated by
+// ENIGMA_EGL_DEBUG_SWATCH=1, and normally returns without doing anything.
 //
-// Interpretation of the log line:
-//   "readback R=255 G=0 B=0"  -> scanout does NOT swap. Set
-//                                needsRenderTargetRBSwap() to false, and
-//                                change gtexture_manager.cpp back to
-//                                GL_BGRA_EXT. The per-shader swap should
-//                                then stay (it makes the *output* R=255
-//                                reach scanout as R, given a non-swapping
-//                                scanout) - i.e. the shaders were right,
-//                                the provider override was wrong.
-//   "readback R=0 G=0 B=255"  -> scanout DOES swap. Keep the provider
-//                                override true, and REMOVE the per-shader
-//                                mix(c, c.bgra, u_rbswap) compensation
-//                                (currently double-swapping on top of the
-//                                provider's own compensation for textured
-//                                draws - see the review notes).
-//
-// Run once on the box, read the log, then delete this whole method and its
-// call site - it is not meant to ship enabled.
+// Measured on DM920 (VC5/BEGL, libvc5dream): wrote (R=255,G=0,B=0),
+// readback R=255 G=0 B=0 - the scanout does NOT swap. So
+// needsRenderTargetRBSwap() returns false and no shader-side or upload-side
+// swap is applied. If a future driver update ever changes this, rerun with
+// ENIGMA_EGL_DEBUG_SWATCH=1 and flip the flag accordingly.
 void DreamboxWindowProvider::debugSwatch() {
-	// TEMPORARY: unconditional for one diagnostic build - revert to
-	// getenv("ENIGMA_EGL_DEBUG_SWATCH") before committing.
+	if (!getenv("ENIGMA_EGL_DEBUG_SWATCH"))
+		return;
 
 	// A known-value draw through the *simplest* possible path: no shader,
 	// no texture, no blend, no projection matrix - glClear() the page to
@@ -202,6 +187,8 @@ void DreamboxWindowProvider::presentPixmap(int page) {
 			// This is the same wait-then-pan order gfbdc.cpp's classic 2D
 			// path uses for gOpcode::flush's CONFIG_ION branch.
 			fb->waitVSync();
+			// `setOffset` is in SCANLINES, not bytes - see fb.h's comment on
+			// setOffset(). Page N's scanout line offset is N * height.
 			fb->setOffset(page * m_height);
 		}
 	}
@@ -224,5 +211,8 @@ void DreamboxWindowProvider::copyPageContent(int from, int to) {
 }
 
 void DreamboxWindowProvider::cleanup() {
-	// Nothing to release: the framebuffer memory is owned by fbClass, not us.
+	// Nothing to release: the framebuffer memory is owned by fbClass (a
+	// process-lifetime singleton that registers itself in its constructor
+	// and is never deleted on this platform), and the EGL surfaces over
+	// these pixmaps are destroyed by gEGLDC's own cleanupEGL().
 }

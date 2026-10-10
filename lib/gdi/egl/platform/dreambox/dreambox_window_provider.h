@@ -34,9 +34,15 @@ public:
 	bool init(int width, int height) override;
 	EGLNativeDisplayType getNativeDisplay() override;
 	bool usesPixmapSurface() const override { return true; }
-	// Proven true via a ground-truth debug swatch - see gles::needsRBSwap's
-	// comment (gles_version.h) and gshader.cpp's fragment shader.
-	bool needsRenderTargetRBSwap() const override { return true; }
+	// Proven false via a ground-truth debug swatch on DM920 (VC5/BEGL):
+	// writing (R=255,G=0,B=0) with glClearColor+glClear and reading it
+	// back with glReadPixels returned exactly R=255,G=0,B=0 - the scanout
+	// reads GL's output byte-for-byte. So no shader-side or upload-side
+	// R/B compensation is wanted or correct on this platform; both must
+	// stay OFF (gles::needsRBSwap = false), and 32bpp enigma2 pixmaps must
+	// be uploaded with GL_BGRA_EXT (their actual memory order), not
+	// GL_RGBA-as-BGRA (see gtexture_manager.cpp and gegldc.cpp).
+	bool needsRenderTargetRBSwap() const override { return false; }
 	int getPageCount() const override { return m_page_count; }
 	void* getNativePixmap(int page) override;
 	void presentPixmap(int page) override;

@@ -417,11 +417,17 @@ bool gEGLDC::initEGL() {
 	// before shader init so it can't be confused by shader state, and after
 	// eglMakeCurrent() (above, in tryInitEGL()) so a real surface is current.
 #ifdef HAVE_DREAMBOX_EGL
-	// -fno-rtti (see configure.ac's ENIGMA2_CFLAGS) rules out dynamic_cast.
-	// This block is already guarded by HAVE_DREAMBOX_EGL and by
-	// usesPixmapSurface(), and on a DM920 build DreamboxWindowProvider is
-	// the only pixmap-surface provider that can be current here - a plain
-	// static_cast is exactly as safe.
+	// Optional one-shot diagnostic: writes a known (R=255,G=0,B=0) clear
+	// and reads one pixel back, to prove empirically whether this box's
+	// scanout swaps R/B. Set ENIGMA_EGL_DEBUG_SWATCH=1 to run it. Its
+	// result (measured on DM920 VC5/BEGL: no swap) is what
+	// DreamboxWindowProvider::needsRenderTargetRBSwap() reports - see that
+	// method's comment.
+	//
+	// -fno-rtti (see configure.ac's ENIGMA2_CFLAGS) rules out dynamic_cast;
+	// this block is guarded by HAVE_DREAMBOX_EGL and by usesPixmapSurface(),
+	// and on a DM920 build DreamboxWindowProvider is the only pixmap-surface
+	// provider that can be current here, so a plain static_cast is safe.
 	if (m_window_provider && m_window_provider->usesPixmapSurface())
 		static_cast<DreamboxWindowProvider*>(m_window_provider)->debugSwatch();
 #endif
