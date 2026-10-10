@@ -417,11 +417,13 @@ bool gEGLDC::initEGL() {
 	// before shader init so it can't be confused by shader state, and after
 	// eglMakeCurrent() (above, in tryInitEGL()) so a real surface is current.
 #ifdef HAVE_DREAMBOX_EGL
-	if (m_window_provider && m_window_provider->usesPixmapSurface()) {
-		DreamboxWindowProvider* dbg = dynamic_cast<DreamboxWindowProvider*>(m_window_provider);
-		if (dbg)
-			dbg->debugSwatch();
-	}
+	// -fno-rtti (see configure.ac's ENIGMA2_CFLAGS) rules out dynamic_cast.
+	// This block is already guarded by HAVE_DREAMBOX_EGL and by
+	// usesPixmapSurface(), and on a DM920 build DreamboxWindowProvider is
+	// the only pixmap-surface provider that can be current here - a plain
+	// static_cast is exactly as safe.
+	if (m_window_provider && m_window_provider->usesPixmapSurface())
+		static_cast<DreamboxWindowProvider*>(m_window_provider)->debugSwatch();
 #endif
 
 	m_texture_manager.setDisplay(m_egl_display);
