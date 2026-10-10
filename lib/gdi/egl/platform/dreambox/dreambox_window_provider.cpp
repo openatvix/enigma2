@@ -12,13 +12,16 @@
 #include <GLES2/gl2.h>
 #endif
 
-// drm/drm_fourcc.h's DRM_FORMAT_ABGR8888. A ground-truth swatch on DM920
-// (see debugSwatch()) proved this SoC's scanout reads GL's output with no
-// R/B swap, so the format token is descriptive only: the vendor EGL driver
-// doesn't use it to reorder bytes, and the correct upload format for the
-// same pixmaps on the GL side is GL_BGRA_EXT (see gles::needsRBSwap's
-// comment in gles_version.h). Any residual "wrong colour" reports on this
-// box are on the shader/upload side, not this field.
+// drm/drm_fourcc.h's DRM_FORMAT_ABGR8888. Empirically verified on DM920
+// that this SoC's scanout reads GL-rendered pixel bytes with R and B
+// swapped relative to what GL wrote - proven by flipping
+// needsRenderTargetRBSwap() to false for one build and observing that
+// every solid colour came out R/B swapped (red -> blue, yellow -> cyan,
+// etc.). So the vendor EGL driver's interpretation of this format token
+// doesn't change the actual byte-swap behaviour; the swap is compensated
+// on the GL side (per-shader u_rbswap uniform for solid colours, GL_RGBA
+// upload declaration for 32bpp textures). See needsRenderTargetRBSwap()'s
+// comment for the full reasoning.
 #define DRM_FORMAT_ABGR8888 0x34324241
 
 DreamboxWindowProvider::DreamboxWindowProvider() : m_page_count(1), m_height(0), m_page_bytes(0) {
@@ -98,22 +101,23 @@ bool DreamboxWindowProvider::init(int width, int height) {
 	return true;
 }
 
-// Diagnostic one-shot: clear the first page to a known colour, read one
-// pixel back with glReadPixels, and log what the framebuffer actually
-// contains. This proves empirically whether this SoC's scanout swaps R/B
-// from what GL writes. Whatever it reports is exactly what
-// needsRenderTargetRBSwap() (above) should return - keep the two in sync.
+// Diagnostic one-shot, gated by ENIGMA_EGL_DEBUG_SWATCH=1. Clears the
+// first page to solid red, reads one pixel back with glReadPixels, and
+// logs the result.
 //
-// Called by gEGLDC::initEGL() (see gles_version.h's needsRBSwap comment) so
-// the EGL context/surface are already current when this runs. Logs (never
-// throws, never asserts): this is diagnostic-only, gated by
-// ENIGMA_EGL_DEBUG_SWATCH=1, and normally returns without doing anything.
+// IMPORTANT: this test cannot detect a *scanout* R/B swap. glReadPixels
+// reads back through the same EGL surface GL wrote to, and any swap
+// between framebuffer memory and the display controller happens
+// downstream of that read, so it cancels on the round trip. Do NOT use
+// this result to change needsRenderTargetRBSwap() - the empirical truth
+// on DM920 is that the scanout DOES swap (established by flipping the
+// flag and observing all solid colours come out R/B swapped; see that
+// method's comment in the header). This swatch is retained only as a
+// sanity check that GL itself round-trips bytes faithfully.
 //
-// Measured on DM920 (VC5/BEGL, libvc5dream): wrote (R=255,G=0,B=0),
-// readback R=255 G=0 B=0 - the scanout does NOT swap. So
-// needsRenderTargetRBSwap() returns false and no shader-side or upload-side
-// swap is applied. If a future driver update ever changes this, rerun with
-// ENIGMA_EGL_DEBUG_SWATCH=1 and flip the flag accordingly.
+// Called by gEGLDC::initEGL() (see gles_version.h's needsRBSwap comment)
+// so the EGL context/surface are already current when this runs. Logs
+// (never throws, never asserts); normally returns without doing anything.
 void DreamboxWindowProvider::debugSwatch() {
 	if (!getenv("ENIGMA_EGL_DEBUG_SWATCH"))
 		return;
@@ -131,21 +135,16 @@ void DreamboxWindowProvider::debugSwatch() {
 	glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
 	const GLenum err = glGetError();
 
-	eDebug("[DreamboxWindowProvider] DEBUG SWATCH: wrote (R=255,G=0,B=0) via glClearColor+glClear, "
-	       "readback R=%u G=%u B=%u A=%u glError=0x%x",
-	       px[0], px[1], px[2], px[3], (unsigned)err);
-
 	if (err == GL_NO_ERROR) {
-		if (px[0] > 200 && px[2] < 50) {
-			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: scanout does NOT swap R/B "
-			       "-> set needsRenderTargetRBSwap() to false and revert gtexture_manager.cpp to GL_BGRA_EXT");
-		} else if (px[2] > 200 && px[0] < 50) {
-			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: scanout DOES swap R/B "
-			       "-> keep needsRenderTargetRBSwap() true and remove the per-shader u_rbswap compensation");
-		} else {
-			eDebug("[DreamboxWindowProvider] DEBUG SWATCH verdict: inconclusive (readback not pure red or blue) "
-			       "- try again after a real frame has been drawn, or check whether GL_RGBA is supported for glReadPixels on this driver");
-		}
+		eDebug("[DreamboxWindowProvider] DEBUG SWATCH: GL round-trip readback is "
+		       "R=%u G=%u B=%u A=%u. NOTE: this says nothing about scanout R/B "
+		       "behaviour - see needsRenderTargetRBSwap()'s comment. Do not use "
+		       "this result to change that flag.",
+		       px[0], px[1], px[2], px[3]);
+	} else {
+		eDebug("[DreamboxWindowProvider] DEBUG SWATCH: glReadPixels raised "
+		       "glError=0x%x - check whether GL_RGBA is supported for "
+		       "glReadPixels on this driver", (unsigned)err);
 	}
 }
 

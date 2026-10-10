@@ -34,15 +34,30 @@ public:
 	bool init(int width, int height) override;
 	EGLNativeDisplayType getNativeDisplay() override;
 	bool usesPixmapSurface() const override { return true; }
-	// Proven false via a ground-truth debug swatch on DM920 (VC5/BEGL):
-	// writing (R=255,G=0,B=0) with glClearColor+glClear and reading it
-	// back with glReadPixels returned exactly R=255,G=0,B=0 - the scanout
-	// reads GL's output byte-for-byte. So no shader-side or upload-side
-	// R/B compensation is wanted or correct on this platform; both must
-	// stay OFF (gles::needsRBSwap = false), and 32bpp enigma2 pixmaps must
-	// be uploaded with GL_BGRA_EXT (their actual memory order), not
-	// GL_RGBA-as-BGRA (see gtexture_manager.cpp and gegldc.cpp).
-	bool needsRenderTargetRBSwap() const override { return false; }
+	// Proven true - the display controller on this SoC reads GL-rendered
+	// pixel bytes with R and B swapped relative to what GL wrote. Two
+	// independent observations established this:
+	//
+	//  1. The original ground-truth debug swatch (still present as
+	//     debugSwatch()) said "does NOT swap", because glReadPixels reads
+	//     back through the same EGL surface GL wrote to, so the scanout
+	//     swap happens *downstream* of the read and cancels on the round
+	//     trip. That result was misleading - the swatch cannot detect a
+	//     scanout quirk by construction.
+	//
+	//  2. When this method was temporarily flipped to false, every solid
+	//     colour drawn to the screen came out R/B swapped: the PLi skin's
+	//     red "All" button rendered as blue, yellow "Provider" as cyan,
+	//     yellow EPG titles as cyan, etc. Setting it back to true makes
+	//     them all correct.
+	//
+	// So every solid-colour fragment shader must pre-swap its output (see
+	// the u_rbswap uniform in gshader.cpp, gadvanced_shader.cpp,
+	// gtext_shader.cpp), and every 32bpp enigma2 pixmap upload must
+	// declare the memory as GL_RGBA (a pre-swap that cancels the scanout
+	// swap on the way out - see gtexture_manager.cpp and
+	// gegldc.cpp's uploadOverlayBand()).
+	bool needsRenderTargetRBSwap() const override { return true; }
 	int getPageCount() const override { return m_page_count; }
 	void* getNativePixmap(int page) override;
 	void presentPixmap(int page) override;
@@ -51,8 +66,9 @@ public:
 
 	// Diagnostic only (ENIGMA_EGL_DEBUG_SWATCH=1) - see the definition's
 	// comment. Called by gEGLDC::initEGL() once, after the EGL context is
-	// current, to settle the R/B scanout question empirically instead of by
-	// guessing. Delete both the method and the call site once the answer is
-	// known; it is not meant to ship enabled.
+	// current. Logs the GL round-trip of a known colour; see the method's
+	// own comment for why this cannot detect a *scanout* R/B swap (only a
+	// GL-internal one). Kept as a sanity check that GL itself is
+	// straight-through; not a proof of scanout behaviour.
 	void debugSwatch();
 };
