@@ -3267,7 +3267,7 @@ void gEGLDC::flip() {
 			if (m_profile)
 				prof_present_ms = msSince(present_t0);
 
-			if (m_page_count > 1) {
+			if (m_page_count > 1 && !m_spinner_active) {
 				// Rotate to the next page for the *next* frame's rendering -
 				// never re-render into the page we just told the provider to
 				// show. This is what actually makes rendering happen
