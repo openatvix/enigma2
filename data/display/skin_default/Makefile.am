@@ -13,7 +13,6 @@ dist_install_DATA = \
 	progress.png \
 	progress-lcd.png \
 	record.png \
-	skin_display.xml \
 	skin_display_picon.xml \
 	stereo.png \
 	wd.png
