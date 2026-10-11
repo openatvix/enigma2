@@ -1,3 +1,5 @@
+SUBDIRS = skin_default
+
 installdir = $(pkgdatadir)/display/skin_default
 
 if HAVE_TEXTLCD
