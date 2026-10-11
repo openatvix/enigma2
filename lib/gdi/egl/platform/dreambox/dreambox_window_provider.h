@@ -34,6 +34,22 @@ public:
 	bool init(int width, int height) override;
 	EGLNativeDisplayType getNativeDisplay() override;
 	bool usesPixmapSurface() const override { return true; }
+	// The DM920's framebuffer is programmed once at boot by init() and never
+	// reprogrammed - fbClass::SetMode() is only ever called from init() here,
+	// and this provider has no onResolutionChanged() override, so the
+	// physical render target is always the boot-time mode (1920x1080 on
+	// DM920) regardless of the canvas size the skin asks for. Without this,
+	// gEGLDC::updatePhysicalSize() computes a physical size from the canvas
+	// (e.g. 1280x720 for an HD skin) that does NOT match the actual EGL
+	// surface (still 1920x1080), so the viewport and shader projection end
+	// up at 1280x720 inside a 1920x1080 surface: the OSD renders into the
+	// top-left corner, and presentPixmap()'s pan (page * m_height) walks
+	// 720 scanlines per page in a framebuffer whose pages are 1080
+	// scanlines apart, showing three overlapping spinner frames. Returning
+	// false makes gEGLDC keep the physical size fixed and scale every
+	// canvas into it instead (see updatePhysicalSize()'s fixed_window
+	// branch), which is what the hardware actually requires here.
+	bool canResizeWindow() override { return false; }
 	// Proven true - the display controller on this SoC reads GL-rendered
 	// pixel bytes with R and B swapped relative to what GL wrote. Two
 	// independent observations established this:
