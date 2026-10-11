@@ -1,4 +1,4 @@
-installdir = $(pkgdatadir)/data/display/skin_default
+installdir = $(pkgdatadir)/skin_default
 
 dist_install_DATA = \
 	dolby.png \
