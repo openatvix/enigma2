@@ -156,9 +156,7 @@
         <eLabel position="0,0" zPosition="-2" size="400,240" backgroundColor="#40000000" foregroundColor="#40000000" />
         <widget font="Regular;48" backgroundColor="#40000000" foregroundColor="#adff2f" halign="center" position="10,10" render="Label" size="386,62" source="parent.Title" transparent="0" valign="center" />
         <ePixmap pixmap="/usr/share/enigma2/display/skin_default/line-lcd.png" position="12,80" size="386,3" zPosition="1" />
-        <widget font="Regular;46" backgroundColor="#40000000" foregroundColor="#ffffff" halign="center" position="10,90" render="Label" size="386,145" source="parent.Model" transparent="0" valign="center">
-            <convert type="DreamboxModel" />
-        </widget>
+        <widget font="Regular;46" backgroundColor="#40000000" foregroundColor="#ffffff" halign="center" position="10,90" render="Label" size="386,145" source="parent.Model" transparent="0" valign="center" />
     </screen>
 
     <!--EmulatorSummary-->
