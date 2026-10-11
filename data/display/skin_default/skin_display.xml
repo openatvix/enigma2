@@ -60,55 +60,58 @@
             <convert type="RemainingToText">inMinutes</convert>
         </widget>
         <eLabel text="TUNER:" position="140,212" size="75,20" halign="center" valign="center" font="Regular; 18" />
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="A" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="A" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">0,0</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="B" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="B" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">1,1</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="C" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="C" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">2,2</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="D" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="D" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">3,3</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="E " foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="E " foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">4,4</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="F" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="F" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">5,5</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="G" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="G" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">6,6</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="H" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="H" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">7,7</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="I" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="I" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">8,8</convert>
             <convert type="ConditionalShowHide" />
         </widget>
-        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="J" foregroundColor="#4b404" font="FdLcD;25" halign="center" valign="center">
+        <widget source="session.FrontendInfo" render="FixedLabel" position="210,205" size="35,35" text="J" foregroundColor="#00c8ff" font="FdLcD;25" halign="center" valign="center">
             <convert type="FrontendInfo">NUMBER</convert>
             <convert type="ValueRange">9,9</convert>
             <convert type="ConditionalShowHide" />
+        </widget>
+        <widget source="session.RecordState" render="Pixmap" pixmap="/usr/share/enigma2/display/skin_default/record.png" position="370,5" size="25,25" zPosition="2">
+            <convert type="ConditionalShowHide"></convert>
         </widget>
     </screen>
 
@@ -328,8 +331,8 @@
         <widget source="session.CurrentService" render="Label" position="208,180" size="180,45" font="Regular; 40" foregroundColor="#adff2f" zPosition="0" halign="right" transparent="1">
             <convert type="ServicePosition">Remaining</convert>
         </widget>
-        <widget source="session.RecordState" render="Pixmap" pixmap="/usr/share/enigma2/display/skin_default/record.png" position="185,190" size="25,25" zPosition="4" alphatest="blend">
-            <convert type="ConditionalShowHide" />
+        <widget source="session.RecordState" render="Pixmap" pixmap="/usr/share/enigma2/display/skin_default/record.png" position="185,190" size="25,25">
+            <convert type="ConditionalShowHide"></convert>
         </widget>
         <widget font="Regular; 40" backgroundColor="#40000000" foregroundColor="#adff2f" position="5,180" render="Label" size="180,45" source="global.CurrentTime" transparent="0">
             <convert type="ClockToText">Default</convert>
@@ -415,8 +418,8 @@
             <convert type="EventTime">Remaining</convert>
             <convert type="RemainingToText">FOLLOW</convert>
         </widget>
-        <widget source="session.RecordState" render="Pixmap" pixmap="/usr/share/enigma2/display/skin_default/record.png" position="285,270" size="25,25" zPosition="3" alphatest="blend">
-            <convert type="ConditionalShowHide" />
+        <widget source="session.RecordState" render="Pixmap" pixmap="/usr/share/enigma2/display/skin_default/record.png" position="365,5" size="25,25">
+            <convert type="ConditionalShowHide"></convert>
         </widget>
     </screen>
 
