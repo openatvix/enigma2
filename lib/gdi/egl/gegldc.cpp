@@ -2078,6 +2078,7 @@ void gEGLDC::enableSpinner() {
 	m_spinner_active = true;
 	if (spinnerGpuPath() && captureSpinnerGpu()) {
 		drawSpinnerGpu(true);
+		requestFlush();
 		return;
 	}
 	// gDC::enableSpinner() (grc.cpp) is about to do
@@ -2110,6 +2111,13 @@ void gEGLDC::enableSpinner() {
 	// held there, so it needs the same unconditional-overwrite blend
 	// disableSpinner() and incrementSpinner() use.
 	compositeTextOverlay(m_spinner_pos, false);
+	// Present the spinner frame immediately. Without this the frame just
+	// composed only reaches the display when the next unrelated flush
+	// happens to arrive - and worse, that flush would rotate pages and
+	// seed the back buffer from the spinner-bearing page (see flip()'s
+	// m_spinner_active guard). Requesting a flush here keeps each spinner
+	// frame confined to the page it was drawn into.
+	requestFlush();
 }
 
 // ENIGMA_EGL_SPINNER_DUMP=1: writes what disableSpinner() is about to paint over the
@@ -2169,6 +2177,7 @@ void gEGLDC::disableSpinner() {
 	if (m_spinner_gpu) {
 		drawSpinnerGpu(false); // exact restore of what was there
 		releaseSpinnerGpu();
+		requestFlush();
 		return;
 	}
 	gDC::disableSpinner();
@@ -2185,6 +2194,7 @@ void gEGLDC::disableSpinner() {
 	// this draw's own (transparent) alpha the absolute truth for that
 	// region instead, actually punching the hole back through to video.
 	compositeTextOverlay(m_spinner_pos, false);
+	requestFlush();
 }
 
 void gEGLDC::incrementSpinner() {
@@ -2199,6 +2209,7 @@ void gEGLDC::incrementSpinner() {
 	}
 	if (m_spinner_gpu) {
 		drawSpinnerGpu(true);
+		requestFlush();
 		return;
 	}
 	gDC::incrementSpinner();
@@ -2217,6 +2228,7 @@ void gEGLDC::incrementSpinner() {
 	// draw's alpha the absolute truth for the region instead, so the
 	// vacated pixels are actually erased back to background every frame.
 	compositeTextOverlay(m_spinner_pos, false);
+	requestFlush();
 }
 
 void gEGLDC::exec(const gOpcode* opcode) {
@@ -3268,83 +3280,113 @@ void gEGLDC::flip() {
 				prof_present_ms = msSince(present_t0);
 
 			if (m_page_count > 1) {
-				// Rotate to the next page for the *next* frame's rendering -
-				// never re-render into the page we just told the provider to
-				// show. This is what actually makes rendering happen
-				// off-screen instead of visibly drawing into live scanout
-				// memory (the single-page behavior this replaces rendered
-				// directly into whatever the display was concurrently
-				// showing, so any frame slower than one vblank was visibly
-				// drawn on screen mid-frame no matter how few GL draw calls
-				// it took).
-				m_render_page = (m_render_page + 1) % m_page_count;
+				// Do NOT rotate pages while a spinner is active. The
+				// spinner is a transient overlay composited directly into
+				// the current render page by gEGLDC::enableSpinner()/
+				// incrementSpinner() (see their comments - both are
+				// deliberately *destructive* composites that overwrite the
+				// page's pixels with the background+icon, not additive
+				// blends). Rotating the spinner-bearing page into the back
+				// buffer therefore bakes the icon into a page that the
+				// skin will not repaint until long after the spinner ends
+				// - on a 3-page framebuffer you get the icon visible on
+				// up to 3 pages, hence the "original + 2 ghosts" (FHD) /
+				// "original + 3 ghosts" (HD, when fbClass grants a
+				// different page count) symptom. Re-rendering into the
+				// page we just presented (single-buffered behaviour) has
+				// a small tearing risk at 10 Hz, which is invisible in
+				// practice and far preferable to permanent ghosts. Normal
+				// rotation resumes the moment disableSpinner() clears
+				// m_spinner_active, by which point the skin has already
+				// repainted at least one full frame.
+				if (!m_spinner_active) {
+					// Rotate to the next page for the *next* frame's rendering -
+					// never re-render into the page we just told the provider to
+					// show. This is what actually makes rendering happen
+					// off-screen instead of visibly drawing into live scanout
+					// memory (the single-page behavior this replaces rendered
+					// directly into whatever the display was concurrently
+					// showing, so any frame slower than one vblank was visibly
+					// drawn on screen mid-frame no matter how few GL draw calls
+					// it took).
+					m_render_page = (m_render_page + 1) % m_page_count;
 
-				// Seed the new back buffer with what's now actually on screen
-				// (shown_page) before any of the next frame's opcodes run -
-				// needed because the compositor above only redraws dirty
-				// regions, an assumption that only holds if the render
-				// target already reflects the previous frame. Prefer doing
-				// this through the GL pipeline itself (gpuCopyPageContent(),
-				// GLES3's glBlitFramebuffer against asymmetric draw/read
-				// surfaces) over a plain CPU memcpy of the page's backing
-				// memory (INativeWindowProvider::copyPageContent()): this
-				// GPU's tile-based deferred renderer appears to track a
-				// surface's content by what it last wrote through the GL
-				// pipeline, not by re-reading the surface's backing memory
-				// on demand, so a CPU memcpy that bypasses the GL pipeline
-				// can be partially invisible to it on the next frame's
-				// render into that same surface - the actual cause behind
-				// an infobar that looked "half updated" with the memcpy
-				// version despite the copied bytes being correct in memory.
-				bool gpu_copied = gpuCopyPageContent(shown_page, m_render_page);
-				bool seeded = gpu_copied;
+					// Seed the new back buffer with what's now actually on screen
+					// (shown_page) before any of the next frame's opcodes run -
+					// needed because the compositor above only redraws dirty
+					// regions, an assumption that only holds if the render
+					// target already reflects the previous frame. Prefer doing
+					// this through the GL pipeline itself (gpuCopyPageContent(),
+					// GLES3's glBlitFramebuffer against asymmetric draw/read
+					// surfaces) over a plain CPU memcpy of the page's backing
+					// memory (INativeWindowProvider::copyPageContent()): this
+					// GPU's tile-based deferred renderer appears to track a
+					// surface's content by what it last wrote through the GL
+					// pipeline, not by re-reading the surface's backing memory
+					// on demand, so a CPU memcpy that bypasses the GL pipeline
+					// can be partially invisible to it on the next frame's
+					// render into that same surface - the actual cause behind
+					// an infobar that looked "half updated" with the memcpy
+					// version despite the copied bytes being correct in memory.
+					bool gpu_copied = gpuCopyPageContent(shown_page, m_render_page);
+					bool seeded = gpu_copied;
 
-				if (gpu_copied) {
-					// gpuCopyPageContent() already left draw=m_render_page
-					// current (its read surface is stale/irrelevant now -
-					// normal rendering opcodes never read from the
-					// framebuffer). A render-target switch is not cheap on
-					// this tile-based GPU (it has to resolve/flush whatever
-					// was pending for the previous target), so don't pay for
-					// a second one here just to "restore" a draw binding
-					// that's already correct.
-				} else {
-					// GPU copy wasn't available or failed - draw is still
-					// whatever it was before rotation (or in an unknown
-					// state if gpuCopyPageContent()'s own eglMakeCurrent
-					// partially failed). Explicitly bind the new page for
-					// both draw and read before falling back to the CPU copy.
-					if (!eglMakeCurrent(m_egl_display, m_egl_surfaces[m_render_page], m_egl_surfaces[m_render_page], m_egl_context)) {
-						eDebug("[gEGLDC] eglMakeCurrent to page %d failed after flip: 0x%x", m_render_page, eglGetError());
-						seeded = false;
+					if (gpu_copied) {
+						// gpuCopyPageContent() already left draw=m_render_page
+						// current (its read surface is stale/irrelevant now -
+						// normal rendering opcodes never read from the
+						// framebuffer). A render-target switch is not cheap on
+						// this tile-based GPU (it has to resolve/flush whatever
+						// was pending for the previous target), so don't pay for
+						// a second one here just to "restore" a draw binding
+						// that's already correct.
 					} else {
-						m_window_provider->copyPageContent(shown_page, m_render_page);
-						seeded = true;
+						// GPU copy wasn't available or failed - draw is still
+						// whatever it was before rotation (or in an unknown
+						// state if gpuCopyPageContent()'s own eglMakeCurrent
+						// partially failed). Explicitly bind the new page for
+						// both draw and read before falling back to the CPU copy.
+						if (!eglMakeCurrent(m_egl_display, m_egl_surfaces[m_render_page], m_egl_surfaces[m_render_page], m_egl_context)) {
+							eDebug("[gEGLDC] eglMakeCurrent to page %d failed after flip: 0x%x", m_render_page, eglGetError());
+							seeded = false;
+						} else {
+							m_window_provider->copyPageContent(shown_page, m_render_page);
+							seeded = true;
+						}
 					}
-				}
 
-				if (!seeded) {
-					// Both the GL blit and the CPU-copy fallback failed to
-					// seed the new page with shown_page's content. Every
-					// draw opcode from here on only touches its own dirty
-					// rect on the assumption the render target already
-					// holds the previous frame - rendering into this
-					// unseeded page now would bake whatever stale content
-					// it happens to still have (e.g. an already-erased
-					// spinner frame from `page_count` flips ago) back onto
-					// the screen the next time rotation shows it again,
-					// with no later event guaranteed to ever fully repaint
-					// that specific page and clear it. Abandon the rotation
-					// for this frame and go back to rendering into
-					// shown_page instead: it was just presented, so it's
-					// known to hold fully correct, current content. This
-					// re-accepts the single-buffer tearing risk the
-					// rotation above exists to avoid, but only for this one
-					// rare failure frame - far better than a page that can
-					// silently resurrect old content indefinitely.
+					if (!seeded) {
+						// Both the GL blit and the CPU-copy fallback failed to
+						// seed the new page with shown_page's content. Every
+						// draw opcode from here on only touches its own dirty
+						// rect on the assumption the render target already
+						// holds the previous frame - rendering into this
+						// unseeded page now would bake whatever stale content
+						// it happens to still have (e.g. an already-erased
+						// spinner frame from `page_count` flips ago) back onto
+						// the screen the next time rotation shows it again,
+						// with no later event guaranteed to ever fully repaint
+						// that specific page and clear it. Abandon the rotation
+						// for this frame and go back to rendering into
+						// shown_page instead: it was just presented, so it's
+						// known to hold fully correct, current content. This
+						// re-accepts the single-buffer tearing risk the
+						// rotation above exists to avoid, but only for this one
+						// rare failure frame - far better than a page that can
+						// silently resurrect old content indefinitely.
+						m_render_page = shown_page;
+						if (!eglMakeCurrent(m_egl_display, m_egl_surfaces[shown_page], m_egl_surfaces[shown_page], m_egl_context))
+							eDebug("[gEGLDC] eglMakeCurrent back to shown page %d failed: 0x%x", shown_page, eglGetError());
+					}
+				} else {
+					// Spinner active: stay on the page we just presented so
+					// the next enableSpinner()/incrementSpinner() composite
+					// overwrites the icon's own previous pixels, and so
+					// nothing seeds a clean page with spinner content. Draw
+					// and read targets were already this page (the spinner
+					// path never changed them), so no eglMakeCurrent() is
+					// needed here.
 					m_render_page = shown_page;
-					if (!eglMakeCurrent(m_egl_display, m_egl_surfaces[shown_page], m_egl_surfaces[shown_page], m_egl_context))
-						eDebug("[gEGLDC] eglMakeCurrent back to shown page %d failed: 0x%x", shown_page, eglGetError());
 				}
 			}
 		} else if (m_use_shadow_fbo && islocked()) {
