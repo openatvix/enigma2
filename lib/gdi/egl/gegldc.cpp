@@ -2741,7 +2741,6 @@ void gEGLDC::applyPendingResolutionChange() {
 	// see updatePhysicalSize()) the skin's full repaint covers the old icon.
 	// See m_spinner_active's comment (gegldc.h).
 	const bool spinner_was_active = m_spinner_active;
-	m_spinner_active = false;
 	releaseSpinnerGpu();
 
 	// Physical size first: everything below that touches the real GL targets
