@@ -2071,10 +2071,20 @@ void gEGLDC::enableSpinner() {
 	// already swapped m_pixmap for the new size but the GL targets are still the
 	// old ones until applyPendingResolutionChange(): nothing valid to capture or
 	// draw into yet. incrementSpinner() restarts the spinner afterwards.
-	if (m_pending_resolution_change) {
-		m_spinner_active = false;
+	//
+	// Do NOT clear m_spinner_active here. The caller (gRC::enableSpinner) has
+	// not disabled the spinner, and once the resolution change is applied,
+	// flip() must still avoid rotating a page that may have the spinner
+	// composited into it. Clearing it here previously left the flag out of
+	// sync with gRC's m_spinner_enabled, so the very next flip() took the
+	// normal rotation path and seeded the back buffer from a page carrying
+	// the spinner's destructive composite - the "smallest spinner rotates,
+	// biggest one is a ghost" symptom on the FHD skin. It is also harmless
+	// to leave it set here: applyPendingResolutionChange() preserves the
+	// flag across the resolution change, and disableSpinner() clears it
+	// when the spinner is actually no longer wanted.
+	if (m_pending_resolution_change)
 		return;
-	}
 	m_spinner_active = true;
 	if (spinnerGpuPath() && captureSpinnerGpu()) {
 		drawSpinnerGpu(true);
@@ -2740,6 +2750,20 @@ void gEGLDC::applyPendingResolutionChange() {
 	// icon is wiped with it; where it survives (fixed-size window, e.g. Hisi -
 	// see updatePhysicalSize()) the skin's full repaint covers the old icon.
 	// See m_spinner_active's comment (gegldc.h).
+	//
+	// Do NOT clear m_spinner_active here. The spinner is a global overlay
+	// owned by gRC::thread()'s idle detector, not by the resolution-change
+	// path, and the skin load that triggered this resolution change is
+	// exactly the situation the spinner is meant to cover - it will still
+	// be active (and re-enabled on the next idle tick) when this function
+	// returns. Clearing the flag here made the very next flip() take the
+	// normal rotation path and seed the back buffer from the
+	// spinner-bearing page, producing the "original + 2/3 baked-in ghosts"
+	// symptom (FHD's 3-page framebuffer showed two ghosts, HD's differently
+	// configured framebuffer showed three). Keep the flag set so flip()
+	// stays on the just-presented page; disableSpinner() (or the next
+	// resolution change, if the skin keeps switching) clears it when the
+	// spinner is actually no longer wanted.
 	const bool spinner_was_active = m_spinner_active;
 	releaseSpinnerGpu();
 

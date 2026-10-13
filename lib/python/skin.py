@@ -1,7 +1,7 @@
 import errno
 import xml.etree.ElementTree
 
-from enigma import addFont, eLabel, ePixmap, ePoint, eRect, eSize, eWidget, eWindow, eWindowStyleManager, eWindowStyleSkinned, getDesktop, gFont, getFontFaces, gRGB, BT_ALPHATEST, BT_ALPHABLEND, BT_HALIGN_CENTER, BT_HALIGN_LEFT, BT_HALIGN_RIGHT, BT_KEEP_ASPECT_RATIO, BT_SCALE, BT_VALIGN_BOTTOM, BT_VALIGN_CENTER, BT_VALIGN_TOP
+from enigma import addFont, eLabel, ePixmap, ePoint, eRect, eSize, eWidget, eWindow, eWindowStyleManager, eWindowStyleSkinned, getDesktop, gFont, getFontFaces, gRGB, setSpinnerOnOff, BT_ALPHATEST, BT_ALPHABLEND, BT_HALIGN_CENTER, BT_HALIGN_LEFT, BT_HALIGN_RIGHT, BT_KEEP_ASPECT_RATIO, BT_SCALE, BT_VALIGN_BOTTOM, BT_VALIGN_CENTER, BT_VALIGN_TOP
 from os.path import basename, dirname, isdir, isfile, join
 from os import listdir
 
@@ -138,51 +138,78 @@ def loadSkin(filename, scope=SCOPE_SKIN, desktop=getDesktop(GUI_SKIN_ID), screen
 	global windowStyles
 	filename = resolveFilename(scope, filename)
 	print("[Skin] Loading skin file '%s'." % filename)
+
+	# Suppress the busy spinner for the whole skin load. Every skin load
+	# repaints large parts of the canvas, and the spinner's own composite
+	# is destructive (see gEGLDC::incrementSpinner()'s comment) - if a
+	# skin redraw lands on top of a spinner frame, that frame becomes a
+	# permanent, frozen part of the skin's own background, exactly the
+	# "smallest spinner rotates, biggest one is a ghost" symptom seen
+	# when switching to the FHD skin. Wrapping the load in
+	# setSpinnerOnOff(0)/setSpinnerOnOff(1) makes the spinner never appear
+	# during the transition, so there is nothing to bake in; it comes
+	# back automatically on the next idle tick once the skin has settled.
+	# setSpinnerOnOff is a no-op if the gRC instance is not yet up (very
+	# early boot), hence the try/except.
+	spinner_suspended = False
 	try:
-		with open(filename, "r") as fd:  # This open gets around a possible file handle leak in Python's XML parser.
-			try:
-				domSkin = xml.etree.ElementTree.parse(fd).getroot()
-				# print("[Skin] DEBUG: Extracting non screen blocks from '%s'.  (scope='%s')" % (filename, scope))
-				# For loadSingleSkinData colors, bordersets etc. are applied one after
-				# the other in order of ascending priority.
-				loadSingleSkinData(desktop, screenID, domSkin, filename, scope=scope)
-				for element in domSkin:
-					if element.tag == "screen":  # Process all screen elements.
-						name = element.attrib.get("name", None)
-						if name:  # Without a name, it's useless!
+		setSpinnerOnOff(0)
+		spinner_suspended = True
+	except Exception:
+		pass
+
+	try:
+		try:
+			with open(filename, "r") as fd:  # This open gets around a possible file handle leak in Python's XML parser.
+				try:
+					domSkin = xml.etree.ElementTree.parse(fd).getroot()
+					# print("[Skin] DEBUG: Extracting non screen blocks from '%s'.  (scope='%s')" % (filename, scope))
+					# For loadSingleSkinData colors, bordersets etc. are applied one after the
+					# other in order of ascending priority.
+					loadSingleSkinData(desktop, screenID, domSkin, filename, scope=scope)
+					for element in domSkin:
+						if element.tag == "screen":  # Process all screen elements.
+							name = element.attrib.get("name", None)
+							if name:  # Without a name, it's useless!
+								scrnID = element.attrib.get("id", None)
+								if scrnID is None or scrnID == screenID:  # If there is a screen ID is it for this display.
+									# print("[Skin] DEBUG: Extracting screen '%s' from '%s'.  (scope='%s')" % (name, filename, scope))
+									domScreens[name] = (element, "%s/" % dirname(filename))
+						elif element.tag == "windowstyle":  # Process the windowstyle element.
 							scrnID = element.attrib.get("id", None)
-							if scrnID is None or scrnID == screenID:  # If there is a screen ID is it for this display.
-								# print("[Skin] DEBUG: Extracting screen '%s' from '%s'.  (scope='%s')" % (name, filename, scope))
-								domScreens[name] = (element, "%s/" % dirname(filename))
-					elif element.tag == "windowstyle":  # Process the windowstyle element.
-						scrnID = element.attrib.get("id", None)
-						if scrnID is not None:  # Without an scrnID, it is useless!
-							scrnID = int(scrnID)
-							# print("[Skin] DEBUG: Processing a windowstyle ID='%s'." % scrnID)
-							domStyle = xml.etree.ElementTree.ElementTree(xml.etree.ElementTree.Element("skin"))
-							domStyle.getroot().append(element)
-							windowStyles[scrnID] = (desktop, screenID, domStyle.getroot(), filename, scope)
-					# Element is not a screen or windowstyle element so no need for it any longer.
-				reloadWindowStyles()  # Reload the window style to ensure all skin changes are taken into account.
-				print("[Skin] Loading skin file '%s' complete." % filename)
-				return True
-			except xml.etree.ElementTree.ParseError as err:
-				fd.seek(0)
-				content = fd.readlines()
-				line, column = err.position
-				print("[Skin] XML Parse Error: '%s' in '%s'!" % (err, filename))
-				data = content[line - 1].replace("\t", " ").rstrip()
-				print("[Skin] XML Parse Error: '%s'" % data)
-				print("[Skin] XML Parse Error: '%s^%s'" % ("-" * column, " " * (len(data) - column - 1)))
-			except Exception as err:
-				print("[Skin] Error: Unable to parse skin data in '%s' - '%s'!" % (filename, err))
-	except (IOError, OSError) as err:
-		if err.errno == errno.ENOENT:  # No such file or directory
-			print("[Skin] Warning: Skin file '%s' does not exist!" % filename)
-		else:
-			print("[Skin] Error %d: Opening skin file '%s'! (%s)" % (err.errno, filename, err.strerror))
-	except Exception as err:
-		print("[Skin] Error: Unexpected error opening skin file '%s'! (%s)" % (filename, err))
+							if scrnID is not None:  # Without an scrnID, it is useless!
+								scrnID = int(scrnID)
+								# print("[Skin] DEBUG: Processing a windowstyle ID='%s'." % scrnID)
+								domStyle = xml.etree.ElementTree.ElementTree(xml.etree.ElementTree.Element("skin"))
+								domStyle.getroot().append(element)
+								windowStyles[scrnID] = (desktop, screenID, domStyle.getroot(), filename, scope)
+						# Element is not a screen or windowstyle element so no need for it any longer.
+					reloadWindowStyles()  # Reload the window style to ensure all skin changes are taken into account.
+					print("[Skin] Loading skin file '%s' complete." % filename)
+					return True
+				except xml.etree.ElementTree.ParseError as err:
+					fd.seek(0)
+					content = fd.readlines()
+					line, column = err.position
+					print("[Skin] XML Parse Error: '%s' in '%s'!" % (err, filename))
+					data = content[line - 1].replace("\t", " ").rstrip()
+					print("[Skin] XML Parse Error: '%s'" % data)
+					print("[Skin] XML Parse Error: '%s^%s'" % ("-" * column, " " * (len(data) - column - 1)))
+				except Exception as err:
+					print("[Skin] Error: Unable to parse skin data in '%s' - '%s'!" % (filename, err))
+		except (IOError, OSError) as err:
+			if err.errno == errno.ENOENT:  # No such file or directory
+				print("[Skin] Warning: Skin file '%s' does not exist!" % filename)
+			else:
+				print("[Skin] Error %d: Opening skin file '%s'! (%s)" % (err.errno, filename, err.strerror))
+		except Exception as err:
+			print("[Skin] Error: Unexpected error opening skin file '%s'! (%s)" % (filename, err))
+	finally:
+		if spinner_suspended:
+			try:
+				setSpinnerOnOff(1)
+			except Exception:
+				pass
 	return False
 
 
