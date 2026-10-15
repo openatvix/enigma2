@@ -77,7 +77,7 @@ class CpuUsageMonitor(Poll, object):
 		Poll.__init__(self)
 		self.__callbacks = []
 		self.__curr_info = self.getCpusInfo()
-		self.poll_interval = 500
+		self.poll_interval = 1000
 
 	def getCpusCount(self):
 		return len(self.__curr_info) - 1
@@ -85,22 +85,25 @@ class CpuUsageMonitor(Poll, object):
 	def getCpusInfo(self):
 		res = []
 		try:
-			fd = open("/proc/stat", "r")
-			for l in fd:
-				if l.find("cpu") == 0:
-					total = busy = 0
-					tmp = l.split()
-					for i in range(1, len(tmp)):
-						tmp[i] = int(tmp[i])
-						total += tmp[i]
-
-					busy = total - tmp[4] - tmp[5]
-					res.append([tmp[0], total, busy])
-
-			fd.close()
-		except:
+			with open("/proc/stat", "r") as fd:
+				for l in fd:
+					if l.find("cpu") == 0:
+						tmp = l.split()
+						# tmp = ['cpu', user, nice, system, idle, iowait, irq, softirq, steal, ...]
+						# Need at least user..iowait -> 6 numbers, so len(tmp) >= 7
+						if len(tmp) < 7:
+							continue
+						try:
+							nums = [int(x) for x in tmp[1:]]
+						except (ValueError, TypeError):
+							continue
+						total = sum(nums)
+						# After dropping 'cpu' at index 0:
+						#   nums[3] = idle, nums[4] = iowait
+						busy = total - nums[3] - nums[4]
+						res.append([tmp[0], total, busy])
+		except Exception:
 			pass
-
 		return res
 
 	def poll(self):
@@ -109,10 +112,18 @@ class CpuUsageMonitor(Poll, object):
 			info = []
 			for i in range(len(self.__curr_info)):
 				try:
-					p = 100 * (self.__curr_info[i][2] - prev_info[i][2]) // (self.__curr_info[i][1] - prev_info[i][1])
-				except ZeroDivisionError:
+					delta_total = self.__curr_info[i][1] - prev_info[i][1]
+					delta_busy = self.__curr_info[i][2] - prev_info[i][2]
+					if delta_total <= 0:
+						p = 0
+					else:
+						p = (100 * delta_busy) // delta_total
+						if p < 0:
+							p = 0
+						elif p > 100:
+							p = 100
+				except (ZeroDivisionError, IndexError):
 					p = 0
-
 				info.append(p)
 
 			for f in self.__callbacks:
