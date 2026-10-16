@@ -208,7 +208,7 @@ def setBoxInfoItems():
 	BoxInfo.setItem("HasColordepth", fileCheck("/proc/stb/video/hdmi_colordepth"))
 	BoxInfo.setItem("HasFrontDisplayPicon", model in ("dm900", "dm920", "et8500", "vusolo4k", "vuuno4kse", "vuduo4k", "vuduo4kse", "vuultimo4k", "gbquad4k", "gbquad4kpro", "gbue4k"))
 	BoxInfo.setItem("Has24hz", fileCheck("/proc/stb/video/videomode_24hz"))
-	BoxInfo.setItem("Has2160p", fileHas("/proc/stb/video/videomode_choices", "2160p50"))
+	BoxInfo.setItem("Has2160p", fileHas("/proc/stb/video/videomode_preferred", "2160p50"))
 	BoxInfo.setItem("HasHDMIpreemphasis", fileCheck("/proc/stb/hdmi/preemphasis"))
 	BoxInfo.setItem("HasColorimetry", fileCheck("/proc/stb/video/hdmi_colorimetry"))
 	BoxInfo.setItem("HasHdrType", fileCheck("/proc/stb/video/hdmi_hdrtype"))

@@ -81,9 +81,9 @@ class VideoHardware:
 	if BoxInfo.getItem("HasYPbPr"):
 		modes["YPbPr"] = ["720p", "1080i", "576p", "480p", "576i", "480i"]
 	if BoxInfo.getItem("Has2160p"):
-		modes["DVI"] = ["720p", "1080p", "2160p", "2160p30", "1080i", "576p", "480p", "576i", "480i"]
+		modes["DVI"] = ["720p", "1080p", "2160p", "1080i", "576p", "480p", "576i", "480i"]
 	else:
-		modes["DVI"] = ["720p", "1080p", "1080i", "576p", "480p", "576i", "480i"]
+		modes["DVI"] = ["720p", "1080p", "2160p", "2160p30", "1080i", "576p", "480p", "576i", "480i"]
 	modes["DVI-PC"] = ["PC"]
 
 	def getOutputAspect(self):
