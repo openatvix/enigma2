@@ -130,7 +130,9 @@ bool gEGLDC::tryInitEGL(int version) {
 			return false;
 		}
 
-		m_page_count = std::max(1, std::min(m_window_provider->getPageCount(), MAX_EGL_SURFACES));
+		// DM920 pixmap surface: single-buffer, no page rotation.
+		// Page rotation lagged menu-close repaints by ~0.5s (see flip()).
+		m_page_count = 1;
 		for (int i = 0; i < m_page_count; ++i) {
 			void* native_pixmap = m_window_provider->getNativePixmap(i);
 			m_egl_surfaces[i] = eglCreatePlatformPixmapSurfaceEXT(m_egl_display, m_egl_config, native_pixmap, nullptr);
