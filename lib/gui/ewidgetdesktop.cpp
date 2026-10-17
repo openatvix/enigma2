@@ -153,7 +153,25 @@ void eWidgetDesktop::recalcClipRegions(eWidget *root)
 		}
 
 		gRegion redraw = (background_before - m_screen.m_background_region) | (m_screen.m_background_region - background_before);
-		invalidate(redraw);
+
+		/* A top-level widget appeared or disappeared (menu open/close, screen
+		 * show/hide, infobar popup toggle): the set of opaque visible roots
+		 * changed, so the render target still holds the previous frame's
+		 * content everywhere outside this frame's own dirty rects - on the
+		 * DM920's immediate-composition path that is exactly the ~0.5s
+		 * "black then video" after a menu closes, because only the menu's
+		 * own rectangle gets repainted this frame and the rest waits for
+		 * later unrelated invalidates to catch up. Force one full-screen
+		 * repaint in that frame instead, so the whole transition happens
+		 * atomically. Ordinary intra-widget redraws (list scrolling, infobar
+		 * text/bar updates on zap, spinners) never change the background
+		 * region, so they keep the original dirty-rect-only path and are
+		 * unaffected by this - which is also why it cannot reintroduce the
+		 * infobar-on-zap flicker that single-buffering caused in gEGLDC. */
+		if (!redraw.empty())
+			invalidate(gRegion(eRect(ePoint(0, 0), m_screen.m_screen_size)));
+		else
+			invalidate(redraw);
 	} else if (m_comp_mode == cmBuffered)
 	{
 		if (!(root->m_vis & eWidget::wVisShow))
