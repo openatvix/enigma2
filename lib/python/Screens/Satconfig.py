@@ -374,8 +374,8 @@ class NimSetup(Setup, ServiceStopScreen):
 
 	# ------------------------------------------------------------------
 	# FIX #2 (UNIVERSAL): auto-detect the local AutoDiseqc.__init__ signature
-	# and call it correctly. Works across OpenPLi, BlackSails, OpenATV,
-	# OpenSPA, OpenViX and minimal forks. Never raises; falls back gracefully.
+	# and call it correctly. Works across OpenPLi, OpenATV, OpenSPA, OpenViX
+	# and minimal forks. Never raises; falls back gracefully.
 	# ------------------------------------------------------------------
 	def autoDiseqcRun(self, ports):
 		self.stopService()
@@ -387,7 +387,7 @@ class NimSetup(Setup, ServiceStopScreen):
 			params = []
 		try:
 			if "order" in params:
-				# OpenPLi / BlackSails / OpenATV standard: (session, feid, nr_of_ports, order="all")
+				# OpenPLi / OpenATV standard: (session, feid, nr_of_ports, order="all")
 				self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports, order)
 			elif "onlyOnSatChange" in params:
 				# OpenViX style: (session, slot, ports, voltageTone, onlyOnSatChange)
