@@ -559,7 +559,7 @@ class NIM:
 				"DVB-S2": ("DVB-S", "DVB-S2", None),
 				"DVB-S2X": ("DVB-S", "DVB-S2", "DVB-S2X", None),
 				"DVB-C2": ("DVB-C", "DVB-C2", None),
-				"DVB-T2": ("DVB-T", "DVB-T2", None),
+					"DVB-T2": ("DVB-T", "DVB-T2", None),
 				"ATSC": ("ATSC", None),
 			}
 
@@ -707,7 +707,10 @@ class NIM:
 
 	def getFriendlyFullDescriptionCompressed(self):
 		if self.isFBCTuner():
-			return "%s-%s: %s" % (self.getSlotName(self.slot), self.getSlotID(self.slot + 7), self.getFullDescription())
+			# FIX: mask slot to the first slot of the FBC group so a non-root FBC link
+			# also displays the correct "Tuner A-H" range. Matches ViX behaviour.
+			base = self.slot & ~7
+			return "%s-%s: %s" % (self.getSlotName(base), self.getSlotID(base + 7), self.getFullDescription())
 		#compress by combining dual tuners by checking if the next tuner has a rf switch
 		elif self.frontend_id is not None and self.number_of_slots > self.frontend_id + 1 and os.access("/proc/stb/frontend/%d/rf_switch" % (self.frontend_id + 1), os.F_OK):
 			return "%s-%s: %s" % (self.slot_name, self.getSlotID(self.slot + 1), self.getFullDescription())
@@ -877,6 +880,12 @@ class NimManager:
 
 		# nim_slots is an array which has exactly one entry for each slot, even for empty ones.
 		self.nim_slots = []
+
+		# OPTIONAL (commented out by default): uncomment only if you use OpenPLi Client Mode
+		# or Vu+ kexec multiboot, so local NIMs are ignored in those modes.
+		# if config.clientmode.enabled.value or (BoxInfo.getItem("HasKexecMultiboot") and BoxInfo.getItem("MultiBootSlot") == 0):
+		# 	print("[NimManager][enumerateNIMs] Receiver in client mode or Vu+ Recovery. Local NIMs will be ignored.")
+		# 	return
 
 		try:
 			nimfile = open("/proc/bus/nim_sockets")
@@ -1127,7 +1136,8 @@ class NimManager:
 				return not (configMode == "nothing")
 
 	def getSatListForNim(self, slotid):
-		list = []
+		# FIX: renamed local variable 'list' -> 'result' to avoid shadowing the builtin
+		result = []
 		if self.nim_slots[slotid].isCompatible("DVB-S"):
 			nim = config.Nims[slotid]
 			#print "slotid:", slotid
@@ -1149,43 +1159,43 @@ class NimManager:
 				dm = nim.diseqcMode.value
 				if dm in ("single", "toneburst_a_b", "diseqc_a_b", "diseqc_a_b_c_d"):
 					if nim.diseqcA.orbital_position < 3600:
-						list.append(self.satList[nim.diseqcA.index - 2])
+						result.append(self.satList[nim.diseqcA.index - 2])
 				if dm in ("toneburst_a_b", "diseqc_a_b", "diseqc_a_b_c_d"):
 					if nim.diseqcB.orbital_position < 3600:
-						list.append(self.satList[nim.diseqcB.index - 2])
+						result.append(self.satList[nim.diseqcB.index - 2])
 				if dm == "diseqc_a_b_c_d":
 					if nim.diseqcC.orbital_position < 3600:
-						list.append(self.satList[nim.diseqcC.index - 2])
+						result.append(self.satList[nim.diseqcC.index - 2])
 					if nim.diseqcD.orbital_position < 3600:
-						list.append(self.satList[nim.diseqcD.index - 2])
+						result.append(self.satList[nim.diseqcD.index - 2])
 				if dm == "positioner":
 					for x in self.satList:
-						list.append(x)
+						result.append(x)
 				if dm == "positioner_select":
 					userSatlist = nim.userSatellitesList.value
 					userSatlist = userSatlist.replace("]", "").replace("[", "")
 					for x in self.satList:
 						sat_str = str(x[0])
 						if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))):
-							list.append(x)
+							result.append(x)
 			elif configMode == "advanced":
 				for x in range(3601, 3605):
 					if int(nim.advanced.sat[x].lnb.value) != 0:
 						for x in self.satList:
-							list.append(x)
-				if not list:
+							result.append(x)
+				if not result:
 					for x in self.satList:
 						if int(nim.advanced.sat[x[0]].lnb.value) != 0:
-							list.append(x)
+							result.append(x)
 				for x in range(3605, 3607):
 					if int(nim.advanced.sat[x].lnb.value) != 0:
 						userSatlist = nim.advanced.sat[x].userSatellitesList.value
 						userSatlist = userSatlist.replace("]", "").replace("[", "")
 						for user_sat in self.satList:
 							sat_str = str(user_sat[0])
-							if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))) and user_sat not in list:
-								list.append(user_sat)
-		return list
+							if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))) and user_sat not in result:
+								result.append(user_sat)
+		return result
 
 	def getNimListForSat(self, orb_pos):
 		return [nim.slot for nim in self.nim_slots if nim.isCompatible("DVB-S") and not nim.isFBCLink() and orb_pos in [sat[0] for sat in self.getSatListForNim(nim.slot)]]
@@ -1224,7 +1234,8 @@ class NimManager:
 		return number and 9998 or _("rotor is not used")
 
 	def getRotorSatListForNim(self, slotid, only_first=False):
-		list = []
+		# FIX: renamed local variable 'list' -> 'rlist' to avoid shadowing the builtin
+		rlist = []
 		if self.nim_slots[slotid].isCompatible("DVB-S"):
 			nim = config.Nims[slotid]
 			configMode = nim.configMode.value
@@ -1233,7 +1244,7 @@ class NimManager:
 					for x in self.satList:
 						if only_first:
 							return True
-						list.append(x)
+						rlist.append(x)
 				elif nim.diseqcMode.value == "positioner_select":
 					userSatlist = nim.userSatellitesList.value
 					userSatlist = userSatlist.replace("]", "").replace("[", "")
@@ -1242,15 +1253,15 @@ class NimManager:
 						if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))):
 							if only_first:
 								return True
-							list.append(x)
+							rlist.append(x)
 			elif configMode == "advanced":
 				for x in range(3601, 3605):
 					if int(nim.advanced.sat[x].lnb.value) != 0:
 						for x in self.satList:
 							if only_first:
 								return True
-							list.append(x)
-				if not list:
+							rlist.append(x)
+				if not rlist:
 					for x in self.satList:
 						lnbnum = int(nim.advanced.sat[x[0]].lnb.value)
 						if lnbnum != 0:
@@ -1258,18 +1269,18 @@ class NimManager:
 							if lnb.diseqcMode.value == "1_2":
 								if only_first:
 									return True
-								list.append(x)
+								rlist.append(x)
 				for x in range(3605, 3607):
 					if int(nim.advanced.sat[x].lnb.value) != 0:
 						userSatlist = nim.advanced.sat[x].userSatellitesList.value
 						userSatlist = userSatlist.replace("]", "").replace("[", "")
 						for user_sat in self.satList:
 							sat_str = str(user_sat[0])
-							if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))) and user_sat not in list:
+							if userSatlist and ("," not in userSatlist and sat_str == userSatlist) or ((', ' + sat_str + ',' in userSatlist) or (userSatlist.startswith(sat_str + ',')) or (userSatlist.endswith(', ' + sat_str))) and user_sat not in rlist:
 								if only_first:
 									return True
-								list.append(user_sat)
-		return list
+								rlist.append(user_sat)
+		return rlist
 
 
 def InitSecParams():
@@ -1444,7 +1455,7 @@ def InitNimManager(nimmgr, update_slots=[]):
 					config.unicable.unicableProduct.save_forced = True
 					section.unicableProduct = ConfigSelection(productslist, default=config.unicable.unicableProduct.value)
 					section.unicableProduct.save_forced = True
-					section.unicableProduct.addNotifier(boundFunction(unicableProductChanged, configEntry.value, lnb_or_matrix))
+					section.unicableProduct.addNotifier(boundFunction(unicableProductChanged, configElement.value, lnb_or_matrix))
 
 				def userScrListChanged(srcfrequencyList, configEntry):
 					section.scrfrequency = ConfigInteger(default=int(srcfrequencyList[configEntry.index]), limits=(0, 99999))
