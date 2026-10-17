@@ -559,7 +559,7 @@ class NIM:
 				"DVB-S2": ("DVB-S", "DVB-S2", None),
 				"DVB-S2X": ("DVB-S", "DVB-S2", "DVB-S2X", None),
 				"DVB-C2": ("DVB-C", "DVB-C2", None),
-					"DVB-T2": ("DVB-T", "DVB-T2", None),
+				"DVB-T2": ("DVB-T", "DVB-T2", None),
 				"ATSC": ("ATSC", None),
 			}
 
