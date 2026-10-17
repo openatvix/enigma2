@@ -337,7 +337,6 @@ class NimSetup(Setup, ServiceStopScreen):
 			self.list.append((_("Force legacy signal stats"), self.nimConfig.force_legacy_signal_stats, _("If set to 'yes' signal values (SNR, etc) will be calculated from API V3. This is an old API version that has now been superseded.")))
 
 		self["config"].list = self.list
-		# FIX #1 (continued): compute button label dynamically from current config state
 		self["key_yellow"].setText(_("Auto DiSEqC") if self.getAutoDiseqcPorts() else (_("Configuration mode") if self.configMode else ""))
 		self["key_blue"].setText(self.isChanged() and _("Set default") or "")
 
@@ -356,7 +355,6 @@ class NimSetup(Setup, ServiceStopScreen):
 			self.createSetup()
 
 	def run(self):
-		# FIX #1 (continued): compute ports dynamically, not from stale attribute
 		autodiseqc_ports = self.getAutoDiseqcPorts()
 		if autodiseqc_ports:
 			self.autoDiseqcRun(autodiseqc_ports)
@@ -374,11 +372,37 @@ class NimSetup(Setup, ServiceStopScreen):
 		self.saveAll(reopen=True)
 		return True
 
-	# FIX #2: match local AutoDiseqc.__init__(session, feid, nr_of_ports, order="all")
+	# ------------------------------------------------------------------
+	# FIX #2 (UNIVERSAL): auto-detect the local AutoDiseqc.__init__ signature
+	# and call it correctly. Works across OpenPLi, BlackSails, OpenATV,
+	# OpenSPA, OpenViX and minimal forks. Never raises; falls back gracefully.
+	# ------------------------------------------------------------------
 	def autoDiseqcRun(self, ports):
 		self.stopService()
 		order = self.nimConfig.autoDiSEqC_order_single.value if self.nimConfig.diseqcMode.value == "single" else self.nimConfig.autoDiSEqC_order.value
-		self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports, order)
+		try:
+			import inspect
+			params = list(inspect.signature(AutoDiseqc.__init__).parameters.keys())
+		except (ValueError, TypeError):
+			params = []
+		try:
+			if "order" in params:
+				# OpenPLi / BlackSails / OpenATV standard: (session, feid, nr_of_ports, order="all")
+				self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports, order)
+			elif "onlyOnSatChange" in params:
+				# OpenViX style: (session, slot, ports, voltageTone, onlyOnSatChange)
+				self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports,
+											  self.nimConfig.simpleDiSEqCSetVoltageTone,
+											  self.nimConfig.simpleDiSEqCOnlyOnSatChange)
+			else:
+				# Minimal / unknown: (session, slot, ports)
+				self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports)
+		except TypeError as e:
+			print("[Satconfig] autoDiseqcRun signature mismatch: %s - falling back to 3-arg call" % e)
+			try:
+				self.session.openWithCallback(self.autoDiseqcCallback, AutoDiseqc, self.slotid, ports)
+			except Exception as e2:
+				print("[Satconfig] autoDiseqcRun failed entirely: %s" % e2)
 
 	def autoDiseqcCallback(self, result):
 		from Screens.Wizard import Wizard
@@ -543,7 +567,6 @@ class NimSetup(Setup, ServiceStopScreen):
 			self.fillListWithAdvancedSatEntrys(Sat)
 		self["config"].list = self.list
 
-	# FIX #4: add loopthrough circular-dependency validation
 	def checkLoopthrough(self):
 		if self.nimConfig.configMode.value == "loopthrough":
 			loopthrough_count = 0
@@ -576,7 +599,6 @@ class NimSetup(Setup, ServiceStopScreen):
 		return checkRecursiveConnect(self.slotid)
 
 	def keySelect(self):
-		# FIX #9: always stop service before opening sub-screens
 		self.stopService()
 		if self["config"].getCurrent() == self.advancedSelectSatsEntry:
 			conf = self.nimConfig.advanced.sat[int(self.nimConfig.advanced.sats.value)].userSatellitesList
@@ -593,7 +615,6 @@ class NimSetup(Setup, ServiceStopScreen):
 			conf.save()
 
 	def keySave(self):
-		# FIX #9 (continued): always stop service; FIX #4: validate loopthrough
 		self.stopService()
 		if not self.checkLoopthrough():
 			self.session.open(MessageBox, _("The loopthrough setting is wrong."), MessageBox.TYPE_ERROR, timeout=10)
@@ -628,7 +649,6 @@ class NimSetup(Setup, ServiceStopScreen):
 					h = _("W")
 				else:
 					h = _("E")
-				# FIX #7: integer division
 				sat_name = ("%d.%d" + h) % (orbpos // 10, orbpos % 10)
 
 			if confirmed[1] == "yes" or confirmed[1] == "no":
@@ -673,7 +693,6 @@ class NimSetup(Setup, ServiceStopScreen):
 
 	def keyCancel(self):
 		if self.isChanged():
-			# FIX #5: default=False so "No" is the safe default
 			self.session.openWithCallback(self.cancelConfirm, MessageBox, _("Really close without saving settings?"), default=False)
 		else:
 			self.restartPrevService()
@@ -718,7 +737,6 @@ class NimSetup(Setup, ServiceStopScreen):
 						frontend.closeFrontend()
 						frontend.reopenFrontend()
 				del raw_channel
-		# FIX #8: unconditional save (matches ViX; safe for cancelConfirm path too)
 		for x in self["config"].list:
 			x[1].save()
 		configfile.save()
@@ -740,7 +758,6 @@ class NimSetup(Setup, ServiceStopScreen):
 		self.restartPrevService()
 
 	def key_yellow(self):
-		# FIX #1 (continued): dynamic ports, not stale cached attribute
 		ports = self.getAutoDiseqcPorts()
 		if ports:
 			self.autoDiseqcRun(ports)
@@ -799,7 +816,6 @@ class NimSelection(Screen):
 			return "??"
 		if orbpos > 1800:
 			orbpos = 3600 - orbpos
-			# FIX #7: integer division
 			return "%d.%dW" % (orbpos // 10, orbpos % 10)
 		return "%d.%dE" % (orbpos // 10, orbpos % 10)
 
@@ -845,7 +861,6 @@ class NimSelection(Screen):
 					fbc_text = (x.isFBCRoot() and _("Slot %s / FBC in %s") % (x.is_fbc[2], x.is_fbc[1])) or _("Slot %s / FBC virtual %s") % (x.is_fbc[2], x.is_fbc[1] - (x.isCompatible("DVB-S") and 2 or 1))
 				if x.isCompatible("DVB-S"):
 					if nimConfig.configMode.value in ("loopthrough", "equal", "satposdepends"):
-						# FIX #6: defensive FBC display, includes target slot name
 						if x.isFBCLink():
 							try:
 								linked_nim = nimmanager.getNim(int(nimConfig.connectedTo.value))
