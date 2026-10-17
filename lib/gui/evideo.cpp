@@ -97,13 +97,9 @@ void eVideoWidget::setFullsize(bool force)
 	{
 		if (force || (pendingFullsize & (1 << decoder)))
 		{
-#ifdef DREAMBOX
-			if (lastPigWidth[decoder] > 0 && lastPigHeight[decoder] > 0)
-			{
-				eVideoWidget::setPosition(decoder, posFullsizeLeft, posFullsizeTop, posFullsizeWidth, posFullsizeHeight);
-				eVideoWidget::setPosition(decoder, lastPigLeft[decoder], lastPigTop[decoder], lastPigWidth[decoder], lastPigHeight[decoder]);
-			}
-#endif	
+			/* Dreambox PIG bounce removed here as well: it also caused a
+			 * short black screen when the fullsize timer fired after the
+			 * video widget became visible again. */
 			eVideoWidget::setPosition(decoder, posFullsizeLeft, posFullsizeTop, posFullsizeWidth, posFullsizeHeight);
 			pendingFullsize &= ~(1 << decoder);
 		}
